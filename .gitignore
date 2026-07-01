@@ -1,0 +1,3 @@
+# Generated Fusion Council run artifacts — local output, never committed.
+runs/*.json
+!runs/.gitkeep
