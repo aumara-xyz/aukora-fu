@@ -1,0 +1,9 @@
+{
+  "name": "aukora-fu",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aukora FU — Fusion Under-the-Hood: a local, observer-only room that visualizes Fusion Council / perceiver state as advisory evidence. Grants no authority.",
+  "scripts": {
+    "start": "bun run server.ts"
+  }
+}

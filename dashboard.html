@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aukora-Fu // Trinity Dissolve</title>
+  <style>
+    :root {
+      --bg-dark: #090c15;
+      --card-bg: rgba(14, 20, 38, 0.8);
+      --border-color: rgba(0, 190, 255, 0.08);
+      --accent-green: #00f0a0;
+      --accent-red: #ff4646;
+      --accent-blue: #00beff;
+      --accent-gold: #ffbe00;
+      --text-main: #f1f5f9;
+      --text-muted: #64748b;
+      --trinity-glow: rgba(0, 190, 255, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #grid-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: 
+        linear-gradient(rgba(0, 190, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 190, 255, 0.015) 1px, transparent 1px);
+      background-size: 30px 30px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    header {
+      height: 70px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 40px;
+      background: rgba(10, 15, 28, 0.7);
+      backdrop-filter: blur(12px);
+      z-index: 10;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    .logo-container h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: #f8fafc;
+    }
+
+    .logo-container span {
+      color: var(--accent-blue);
+      text-shadow: 0 0 10px rgba(0, 190, 255, 0.4);
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      box-shadow: 0 0 8px var(--accent-blue);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 190, 255, 0.6); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(0, 190, 255, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 190, 255, 0); }
+    }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 360px 1fr 390px;
+      gap: 20px;
+      padding: 20px 40px;
+      overflow: hidden;
+      z-index: 5;
+    }
+
+    .dashboard-col {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      position: relative;
+    }
+
+    .card-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--text-muted);
+      font-weight: 700;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      padding-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* Thread Audit History List */
+    .thread-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      max-height: 160px;
+    }
+
+    .thread-item {
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      border-radius: 6px;
+      padding: 10px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .thread-item:hover {
+      background: rgba(0, 190, 255, 0.03);
+      border-color: rgba(0, 190, 255, 0.2);
+    }
+
+    .thread-active {
+      background: rgba(0, 190, 255, 0.06) !important;
+      border-color: var(--accent-blue) !important;
+      box-shadow: 0 0 10px rgba(0, 190, 255, 0.1);
+    }
+
+    .thread-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .thread-title {
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .thread-sub {
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+
+    .thread-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    /* Consensus Status banner */
+    #consensus-banner {
+      padding: 14px;
+      border-radius: 10px;
+      text-align: center;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      font-size: 15px;
+    }
+
+    .banner-green { background: rgba(0, 240, 160, 0.08); border: 1px solid rgba(0, 240, 160, 0.2); color: var(--accent-green); }
+    .banner-yellow { background: rgba(255, 190, 0, 0.08); border: 1px solid rgba(255, 190, 0, 0.2); color: var(--accent-gold); }
+    .banner-red { background: rgba(255, 70, 70, 0.08); border: 1px solid rgba(255, 70, 70, 0.2); color: var(--accent-red); }
+
+    /* Model logs */
+    .model-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .model-row {
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid rgba(255, 255, 255, 0.02);
+      border-radius: 6px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .model-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .model-name {
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+    }
+
+    .model-vote-tag {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    .model-distribution-bar {
+      display: flex;
+      height: 4px;
+      border-radius: 2px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .bar-segment {
+      height: 100%;
+      transition: width 0.5s ease;
+    }
+
+    /* KL Divergence matrix */
+    .matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9px;
+      text-align: center;
+    }
+
+    .matrix-table th {
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 6px;
+      border-bottom: 1px solid var(--border-color);
+      text-transform: uppercase;
+    }
+
+    .matrix-table td {
+      padding: 8px 6px;
+      font-family: monospace;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.01);
+    }
+
+    /* Center Visualizer Area */
+    #visualizer-card {
+      flex: 1;
+      position: relative;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #resonator-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* How it works details card */
+    .architecture-explain {
+      background: rgba(14, 20, 38, 0.4);
+      border: 1px solid rgba(0, 190, 255, 0.05);
+      border-radius: 10px;
+      padding: 16px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #94a3b8;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .explain-title {
+      font-size: 10px;
+      color: var(--accent-blue);
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    /* Footer styling */
+    footer {
+      height: 80px;
+      border-top: 1px solid var(--border-color);
+      background: rgba(10, 15, 28, 0.7);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 0 40px;
+      z-index: 10;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(0, 190, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .btn-green:hover { border-color: var(--accent-green); box-shadow: 0 0 10px rgba(0, 240, 160, 0.15); }
+    .btn-red:hover { border-color: var(--accent-red); box-shadow: 0 0 10px rgba(255, 70, 70, 0.15); }
+  </style>
+</head>
+<body>
+
+  <div id="grid-overlay"></div>
+
+  <header>
+    <div class="logo-container">
+      <h1>AUKORA-FU // <span>TRINITY DISSOLVE</span></h1>
+    </div>
+    <div class="header-status">
+      <div class="pulse-dot"></div>
+      <span>Swarm Telemetry Loop Active (localhost:9900)</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Left Column: Thread History & Divergence -->
+    <div class="dashboard-col">
+      <!-- Recent Audits Thread List -->
+      <div class="card">
+        <div class="card-title">Recent Swarm Audits (Threads)</div>
+        <div class="thread-list" id="thread-list-container">
+          <!-- Thread items dynamically populated -->
+        </div>
+      </div>
+
+      <div id="consensus-banner" class="banner-green">
+        CONSENSUS // GREEN
+      </div>
+
+      <div class="card" style="flex: 1; min-height: 200px;">
+        <div class="card-title">Pairwise Divergence Matrix</div>
+        <table class="matrix-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>GP5</th>
+              <th>CLD</th>
+              <th>GLM</th>
+              <th>KIM</th>
+              <th>DSK</th>
+              <th>MST</th>
+              <th>GEM</th>
+            </tr>
+          </thead>
+          <tbody id="matrix-body">
+            <!-- Table dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Center Column: Node Network visualizer & How it works -->
+    <div class="dashboard-col">
+      <div class="card" id="visualizer-card">
+        <canvas id="resonator-canvas"></canvas>
+      </div>
+
+      <div class="architecture-explain">
+        <div class="explain-title">Dynamic Mind Refinement Loop // how it works</div>
+        <div>
+          <strong>No Shared Network:</strong> The models do not talk directly to each other. They read the same workspace folders on your Mac, using local files as their shared memory.
+        </div>
+        <div>
+          <strong>Real-Time Refinement Loop:</strong> If a model flags a risk (flashing yellow or red), the Perceiver instantly feeds that model's critique back as context into the next round's prompts for the other models. This forces them to dynamically re-analyze the file, triggering a local simulated hive mind.
+        </div>
+        <div>
+          <strong>Aukora Central Core:</strong> The central core synthesizes the probability distributions from GPT-5, Claude, GLM, Kimi, DeepSeek, Mistral, Gemini, and Grok, calculating the overall curvature proxy of the decision space.
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Swarm Model Telemetry Logs -->
+    <div class="dashboard-col">
+      <div class="card" style="flex: 1; overflow: hidden;">
+        <div class="card-title">Model Probabilities (Token-Logprobs)</div>
+        <div class="model-list" id="model-telemetry-list">
+          <!-- Model rows dynamically inserted -->
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <button class="btn btn-green" onclick="selectThread(0)">
+      <span>Simulate Clear Consensus</span>
+    </button>
+    <button class="btn btn-red" onclick="selectThread(1)">
+      <span>Simulate Security Pinch</span>
+    </button>
+    <button class="btn" onclick="selectThread(2)">
+      <span>Simulate Model Outage</span>
+    </button>
+  </footer>
+
+  <script>
+    const canvas = document.getElementById('resonator-canvas');
+    const ctx = canvas.getContext('2d');
+    const matrixBody = document.getElementById('matrix-body');
+    const telemetryList = document.getElementById('model-telemetry-list');
+    const threadListContainer = document.getElementById('thread-list-container');
+    const consensusBanner = document.getElementById('consensus-banner');
+
+    let time = 0;
+    let selectedThreadIdx = 0;
+
+    // Standard high-performance Swarm models including GPT-5 and Gemini 3.1
+    const models = [
+      { id: 'GP5', name: 'GPT 5.0 Preview', dist: { g: 0.95, y: 0.03, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'CLD', name: 'Claude Opus 4.8', dist: { g: 0.92, y: 0.06, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'GLM', name: 'GLM 5.2', dist: { g: 0.88, y: 0.10, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'KIM', name: 'Kimi K2.7 Code', dist: { g: 0.90, y: 0.08, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'DSK', name: 'DeepSeek V4 Pro', dist: { g: 0.91, y: 0.07, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'MST', name: 'Mistral Large 2512', dist: { g: 0.89, y: 0.09, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'GEM', name: 'Gemini 3.1 Pro', dist: { g: 0.93, y: 0.05, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 },
+      { id: 'GRK', name: 'Grok 4.3 Red', dist: { g: 0.90, y: 0.08, r: 0.02 }, vote: 'GREEN', x: 0, y: 0 }
+    ];
+
+    // Thread runs history definition
+    const auditThreads = [
+      {
+        id: 'run-861',
+        title: 'Run #861: Proprioception Audit',
+        sub: 'Consensus achieved · Clean compile',
+        badge: 'GREEN',
+        badgeClass: 'banner-green',
+        curvature: 0.03,
+        votes: {
+          GP5: { g: 0.95, y: 0.03, r: 0.02, v: 'GREEN' },
+          CLD: { g: 0.92, y: 0.06, r: 0.02, v: 'GREEN' },
+          GLM: { g: 0.88, y: 0.10, r: 0.02, v: 'GREEN' },
+          KIM: { g: 0.90, y: 0.08, r: 0.02, v: 'GREEN' },
+          DSK: { g: 0.91, y: 0.07, r: 0.02, v: 'GREEN' },
+          MST: { g: 0.89, y: 0.09, r: 0.02, v: 'GREEN' },
+          GEM: { g: 0.93, y: 0.05, r: 0.02, v: 'GREEN' },
+          GRK: { g: 0.90, y: 0.08, r: 0.02, v: 'GREEN' }
+        }
+      },
+      {
+        id: 'run-860',
+        title: 'Run #860: Memory Boundary Shift',
+        sub: 'Security breach · GLM flagged RED',
+        badge: 'RED',
+        badgeClass: 'banner-red',
+        curvature: 2.76,
+        votes: {
+          GP5: { g: 0.85, y: 0.13, r: 0.02, v: 'GREEN' },
+          CLD: { g: 0.80, y: 0.15, r: 0.05, v: 'GREEN' },
+          GLM: { g: 0.05, y: 0.05, r: 0.90, v: 'RED' }, // GLM flags RED breach
+          KIM: { g: 0.70, y: 0.25, r: 0.05, v: 'YELLOW' },
+          DSK: { g: 0.82, y: 0.15, r: 0.03, v: 'GREEN' },
+          MST: { g: 0.55, y: 0.40, r: 0.05, v: 'YELLOW' },
+          GEM: { g: 0.88, y: 0.10, r: 0.02, v: 'GREEN' },
+          GRK: { g: 0.70, y: 0.20, r: 0.10, v: 'YELLOW' }
+        }
+      },
+      {
+        id: 'run-859',
+        title: 'Run #859: Womb Prompt Sync',
+        sub: 'Two model failures · Quorum updated',
+        badge: 'YELLOW',
+        badgeClass: 'banner-yellow',
+        curvature: 0.65,
+        votes: {
+          GP5: { g: 0.90, y: 0.08, r: 0.02, v: 'GREEN' },
+          CLD: { g: 0.88, y: 0.10, r: 0.02, v: 'GREEN' },
+          GLM: { g: 0.00, y: 0.00, r: 0.00, v: 'OUTAGE' }, // GLM offline
+          KIM: { g: 0.00, y: 0.00, r: 0.00, v: 'OUTAGE' }, // Kimi offline
+          DSK: { g: 0.65, y: 0.30, r: 0.05, v: 'YELLOW' },
+          MST: { g: 0.85, y: 0.12, r: 0.03, v: 'GREEN' },
+          GEM: { g: 0.90, y: 0.08, r: 0.02, v: 'GREEN' },
+          GRK: { g: 0.60, y: 0.35, r: 0.05, v: 'YELLOW' }
+        }
+      }
+    ];
+
+    function resizeCanvas() {
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Render Threads Loop
+    function renderThreads() {
+      threadListContainer.innerHTML = '';
+      auditThreads.forEach((t, idx) => {
+        let badgeColor = 'var(--accent-green)';
+        if (t.badge === 'YELLOW') badgeColor = 'var(--accent-gold)';
+        if (t.badge === 'RED') badgeColor = 'var(--accent-red)';
+
+        const item = document.createElement('div');
+        item.className = `thread-item ${idx === selectedThreadIdx ? 'thread-active' : ''}`;
+        item.onclick = () => selectThread(idx);
+        item.innerHTML = `
+          <div class="thread-meta">
+            <span class="thread-title">${t.title}</span>
+            <span class="thread-sub">${t.sub}</span>
+          </div>
+          <span class="thread-badge" style="color: ${badgeColor}; border: 1px solid ${badgeColor}33; background: rgba(255,255,255,0.01);">${t.badge}</span>
+        `;
+        threadListContainer.appendChild(item);
+      });
+    }
+
+    // Select thread callback
+    function selectThread(idx) {
+      selectedThreadIdx = idx;
+      const thread = auditThreads[idx];
+
+      // Update models from selected thread state
+      models.forEach(m => {
+        const v = thread.votes[m.id];
+        m.dist = { g: v.g, y: v.y, r: v.r };
+        m.vote = v.v;
+      });
+
+      // Update banner and curvature text
+      consensusBanner.innerText = `CONSENSUS // ${thread.badge}`;
+      consensusBanner.className = thread.badgeClass;
+
+      renderThreads();
+      renderTelemetry();
+    }
+
+    function renderTelemetry() {
+      // 1. Model distribution logs
+      telemetryList.innerHTML = '';
+      models.forEach(m => {
+        let voteColor = 'var(--accent-green)';
+        if (m.vote === 'YELLOW') voteColor = 'var(--accent-gold)';
+        if (m.vote === 'RED') voteColor = 'var(--accent-red)';
+        if (m.vote === 'OUTAGE') voteColor = 'var(--text-muted)';
+
+        const row = document.createElement('div');
+        row.className = 'model-row';
+        row.innerHTML = `
+          <div class="model-meta-row">
+            <span class="model-name">${m.name}</span>
+            <span class="model-vote-tag" style="color: ${voteColor}; border: 1px solid ${voteColor}33; background: rgba(255,255,255,0.01);">${m.vote}</span>
+          </div>
+          <div class="model-distribution-bar">
+            <div class="bar-segment" style="width: ${m.dist.g * 100}%; background: var(--accent-green)"></div>
+            <div class="bar-segment" style="width: ${m.dist.y * 100}%; background: var(--accent-gold)"></div>
+            <div class="bar-segment" style="width: ${m.dist.r * 100}%; background: var(--accent-red)"></div>
+          </div>
+          <div class="model-meta-row" style="font-size: 9px; color: var(--text-muted); font-family: monospace;">
+            <span>G: ${(m.dist.g * 100).toFixed(0)}%</span>
+            <span>Y: ${(m.dist.y * 100).toFixed(0)}%</span>
+            <span>R: ${(m.dist.r * 100).toFixed(0)}%</span>
+          </div>
+        `;
+        telemetryList.appendChild(row);
+      });
+
+      // 2. KL Matrix computations
+      matrixBody.innerHTML = '';
+      models.forEach((m1, idx1) => {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${m1.id}</td>`;
+        models.forEach((m2, idx2) => {
+          if (idx1 === idx2) {
+            row.innerHTML += `<td style="color: var(--text-muted);">0.00</td>`;
+          } else if (m1.vote === 'OUTAGE' || m2.vote === 'OUTAGE') {
+            row.innerHTML += `<td style="color: var(--text-muted);">N/A</td>`;
+          } else {
+            let kl = 0;
+            const smooth = (d) => ({ g: d.g + 1e-9, y: d.y + 1e-9, r: d.r + 1e-9 });
+            const s1 = smooth(m1.dist);
+            const s2 = smooth(m2.dist);
+            kl += s1.g * Math.log(s1.g / s2.g);
+            kl += s1.y * Math.log(s1.y / s2.y);
+            kl += s1.r * Math.log(s1.r / s2.r);
+            kl = Math.max(0, kl);
+            
+            const cellColor = kl > 0.5 ? 'var(--accent-red)' : kl > 0.1 ? 'var(--accent-gold)' : 'var(--text-main)';
+            row.innerHTML += `<td style="color: ${cellColor}; font-weight: ${kl > 0.1 ? '600' : 'normal'};">${kl.toFixed(3)}</td>`;
+          }
+        });
+        matrixBody.appendChild(row);
+      });
+    }
+
+    // Node network layout calculations
+    function calculateNodeLayout(cx, cy) {
+      const r = Math.min(canvas.width, canvas.height) * 0.32;
+      models.forEach((m, idx) => {
+        const angle = (idx / models.length) * Math.PI * 2;
+        m.x = cx + Math.cos(angle) * r;
+        m.y = cy + Math.sin(angle) * r;
+      });
+    }
+
+    // Draw the entire interactive node visualizer
+    function drawNodeNetwork() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      time += 0.02;
+
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      calculateNodeLayout(cx, cy);
+
+      // 1. Draw connection lines from external models to the central core (Aukora)
+      models.forEach(m => {
+        if (m.vote === 'OUTAGE') return; // cut connection line
+
+        let lineColor = 'rgba(0, 190, 255, 0.15)';
+        if (m.vote === 'RED') lineColor = 'rgba(255, 70, 70, 0.3)';
+        if (m.vote === 'YELLOW') lineColor = 'rgba(255, 190, 0, 0.2)';
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(m.x, m.y);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = m.vote === 'RED' ? 2 : 1;
+        ctx.stroke();
+
+        // Animated warning pulses traveling along the lines
+        if (m.vote === 'RED' || m.vote === 'YELLOW' || Math.sin(time + m.id.charCodeAt(0)) > 0) {
+          const tPos = (time * 0.5) % 1.0;
+          const px = m.x + (cx - m.x) * tPos;
+          const py = m.y + (cy - m.y) * tPos;
+          const pulseColor = m.vote === 'RED' ? 'var(--accent-red)' : m.vote === 'YELLOW' ? 'var(--accent-gold)' : 'var(--accent-blue)';
+          
+          ctx.beginPath();
+          ctx.arc(px, py, m.vote === 'RED' ? 4 : 3, 0, Math.PI * 2);
+          ctx.fillStyle = pulseColor;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = pulseColor;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      });
+
+      // 2. Draw Aukora Center Core
+      const thread = auditThreads[selectedThreadIdx];
+      let coreColor = 'var(--accent-blue)';
+      if (thread.badge === 'RED') coreColor = 'var(--accent-red)';
+      if (thread.badge === 'YELLOW') coreColor = 'var(--accent-gold)';
+
+      // Pulsing outer orbit fields
+      ctx.strokeStyle = coreColor + '22';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 55 + Math.sin(time * 3) * 6, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 45 + Math.cos(time * 2) * 4, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Core Solid Orb
+      ctx.beginPath();
+      ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+      ctx.fillStyle = coreColor + 'dd';
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = coreColor;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Core label
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('AUKORA', cx, cy);
+
+      // 3. Draw Model Nodes
+      models.forEach(m => {
+        let nodeColor = 'var(--accent-green)';
+        if (m.vote === 'YELLOW') nodeColor = 'var(--accent-gold)';
+        if (m.vote === 'RED') nodeColor = 'var(--accent-red)';
+        if (m.vote === 'OUTAGE') nodeColor = '#334155';
+
+        // Outer glow
+        if (m.vote !== 'OUTAGE') {
+          ctx.beginPath();
+          ctx.arc(m.x, m.y, 22, 0, Math.PI * 2);
+          ctx.strokeStyle = nodeColor + '33';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // Inner Solid Node
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, 14, 0, Math.PI * 2);
+        ctx.fillStyle = m.vote === 'OUTAGE' ? '#1e293b' : nodeColor + 'ee';
+        if (m.vote !== 'OUTAGE') {
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = nodeColor;
+        }
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Model Tag Text
+        ctx.fillStyle = m.vote === 'OUTAGE' ? 'var(--text-muted)' : '#ffffff';
+        ctx.font = 'bold 8px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(m.id, m.x, m.y);
+      });
+    }
+
+    function tick() {
+      drawNodeNetwork();
+      requestAnimationFrame(tick);
+    }
+
+    // Init loops
+    selectThread(0);
+    tick();
+  </script>
+</body>
+</html>
