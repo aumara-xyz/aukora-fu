@@ -1,38 +1,65 @@
-# Aukora FU — Fusion Under-the-Hood (observer room)
+# Aukora FU — Fusion Under-the-Hood
 
-**FU = Fusion / Fusion Under-the-Hood.** A local, read-only **observer room** that visualizes Fusion
-Council / perceiver state — a consensus banner, per-model votes, a KL-divergence matrix, and a resonator
-visualizer. It is a *window*, not a lever.
+**FU = Fusion / Fusion Under-the-Hood.** A local Fusion Council runner plus browser observer.
+It calls models through OpenRouter, writes validated `fusion-run-v1` artifacts into `runs/`,
+then the browser visualizes the council: consensus, per-model votes, divergence, contrarian model,
+and run history.
 
 ## What it is (and is not)
-- ✅ Observer / dashboard surface. Advisory / **evidence-only**.
-- ✅ Loopback-only (`127.0.0.1:9900`). Reads validated **`fusion-run-v1`** artifacts; no network egress, no microphone, no camera.
+- ✅ Local advisory Fusion engine: `bun run council`.
+- ✅ Browser observer: `bun run start` then open `http://127.0.0.1:9900`.
+- ✅ Demo/sample mode with no API key: `bun run sample`.
+- ✅ Loopback-only UI (`127.0.0.1:9900`). No microphone, no camera.
 - ✅ **Read-only server**: writes nothing, deletes nothing, runs no tool; guards path traversal to `runs/`.
 - ❌ NOT a kernel organ. It does **not** live in `core/src` and imports **nothing** from the kernel.
 - ❌ It never signs, unlocks, promotes, authorizes, writes memory, or affects a gate verdict.
 
-The governance boundary is non-negotiable: FU can *show* Fusion/council/perceiver state as advisory
-evidence; it can never *act*. While FU lives in the seed, `core/tests/seedRootContract.test.ts` +
-`core/tests/fusionRunArtifact.test.ts` pin it as observer-only (drift fails the gate); see
-`docs/SEED_ROOT_CONTRACT.md` for the serve/observer rules.
+The governance boundary is non-negotiable: FU can review and visualize. It cannot authorize.
+Inside full Aukora, the governed source of truth remains `aukora-symbiote`; this private repo is a
+portable/private Fusion lab.
 
-## Run
-    # 1. serve the observer (read-only, loopback)
-    bun run server.ts            # → http://127.0.0.1:9900
-    # 2. (optional) fire a real council run — writes a validated fusion-run-v1 artifact into runs/
-    cd ../../core && bun run run-council.ts   # COUNCIL_BUDGET=3 for a cheap smoke
+## Quick Start
+
+1. Install Bun:
+
+       https://bun.sh
+
+2. Start the browser observer:
+
+       bun run start
+
+3. Open:
+
+       http://127.0.0.1:9900
+
+4. In a second terminal, prove the engine writes a run:
+
+       bun run sample
+
+5. For a real model council run, add an OpenRouter key:
+
+       cp .env.example .env
+       # edit .env and set OPENROUTER_API_KEY
+       bun run council
+
+The page refreshes when a new run lands. Generated `runs/*.json` are local output and are gitignored.
+
+## Review Another Folder
+
+By default, FU reviews itself. To point the council at another local project:
+
+    FUSION_TARGET=/absolute/path/to/project COUNCIL_BUDGET=10 bun run council
+
+Useful knobs:
+
+    COUNCIL_BUDGET=10          # max model calls
+    COUNCIL_CONCURRENCY=3      # max simultaneous calls, clamped 1..8
+    FUSION_MODELS=a,b,c        # comma-separated OpenRouter model slugs
 
 Endpoints (all read-only): `/api/runs`, `/api/run/latest`, `/api/run/:id`, and SSE `/api/stream`
-(live-refresh when a new run lands). Generated `runs/*.json` are gitignored — never commit raw council
-output; ship a clearly synthetic sample under `examples/` if a public copy needs demo data.
+(live-refresh when a new run lands).
 
-## Destined to be its own public repo (a gift)
-FU is developed here for now but is meant to be **extracted into its own public GitHub repository** as a
-gift. The whole lane is self-contained under `dashboard/fu/`, so extraction is a copy — or a clean split:
+## Private Lab Warning
 
-    git subtree split --prefix=dashboard/fu -b aukora-fu
-    # then push branch `aukora-fu` to the new public repo
-
-Before going public: add a LICENSE (owner's choice), keep the observer-only invariants (no authority, no
-live secrets, loopback-only, advisory evidence only), and wire any live data as READ-ONLY evidence (e.g.
-the seed's `fusion-advisory-v1` artifact) — never a control surface.
+This is private early tech. Do not publish without a release/legal/patent review. Do not commit `.env`
+or generated `runs/*.json`.

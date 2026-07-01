@@ -52,7 +52,7 @@ const server = http.createServer((req, res) => {
   if (url === '/api/runs') return json(res, 200, listRuns());
   if (url === '/api/run/latest') {
     const a = readRun('latest');
-    return a ? json(res, 200, a) : json(res, 404, { error: 'no runs yet — fire the council: cd core && bun run run-council.ts' });
+    return a ? json(res, 200, a) : json(res, 404, { error: 'no runs yet - run: bun run sample OR OPENROUTER_API_KEY=... bun run council' });
   }
   if (url.startsWith('/api/run/')) {
     const a = readRun(decodeURIComponent(url.slice('/api/run/'.length)));
