@@ -5,6 +5,9 @@ runs/*.json
 # Local secrets/config.
 .env
 *.log
+node_modules/
+coverage/
+dist/
 
 # Optional local review target folder.
 target/

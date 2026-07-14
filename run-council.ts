@@ -445,6 +445,7 @@ function sampleResults(council: string[]): Review[] {
 }
 
 async function main() {
+  console.warn('[fu][legacy] This is the preserved v0.1 shard runner, not the hardened canonical council in src/.');
   loadDotenv();
   const sample = process.argv.includes("--sample");
   const council = models();
