@@ -15,7 +15,7 @@ if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) {
 
 const forbiddenModule = /(?:^|\/)(?:authority|convex|memory|aura|kira)(?:\/|$)|aumlok|nativeLiveApply|policyKernel|signer|voiceLane|opencode\/auth|symbiotePaths/i;
 const networkModule = /^(?:(?:node:)?(?:http|https|http2|net|tls|dns|dgram)(?:\/|$)|undici(?:\/|$)|axios$|ws$|openai(?:\/|$)|@openai\/|openrouter(?:\/|$)|@openrouter\/)/;
-const effectModule = /^(?:node:)?(?:child_process|cluster|worker_threads)(?:\/|$)/;
+const effectModule = /^(?:node:)?(?:child_process|cluster|worker_threads|module|vm)(?:\/|$)/;
 const filesystemModule = /^(?:node:)?fs(?:\/promises)?$/;
 const allowedFilesystemFiles = new Set(['aukoraFuSpendLedger.ts']);
 const forbiddenAmbientPath = /(?:\.aukora-symbiote|opencode\/auth|symbiotePaths)/i;
@@ -61,6 +61,11 @@ for (const file of listSourceFiles(srcDir)) {
   const rel = path.relative(srcDir, file).split(path.sep).join('/');
   const source = fs.readFileSync(file, 'utf8');
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  if (sourceFile.parseDiagnostics.length) {
+    const diagnostic = sourceFile.parseDiagnostics[0];
+    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
+    failures.push(`${rel}: TypeScript parse diagnostic: ${message}`);
+  }
 
   function visit(node) {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
@@ -90,8 +95,26 @@ for (const file of listSourceFiles(srcDir)) {
     if (ts.isIdentifier(node) && /^(?:fetch|WebSocket|EventSource|XMLHttpRequest)$/.test(node.text)) {
       failures.push(`${rel}: forbidden network capability ${node.text}`);
     }
+    if (ts.isIdentifier(node) && node.text === 'process') {
+      failures.push(`${rel}: forbidden ambient process capability`);
+    }
+    if (ts.isIdentifier(node) && /^(?:Bun|Deno)$/.test(node.text)) {
+      failures.push(`${rel}: forbidden ambient runtime capability ${node.text}`);
+    }
+    if (ts.isIdentifier(node) && /^(?:globalThis|window|navigator)$/.test(node.text)) {
+      failures.push(`${rel}: forbidden ambient global capability ${node.text}`);
+    }
+    if (ts.isIdentifier(node) && node.text === 'require') {
+      failures.push(`${rel}: forbidden CommonJS require capability`);
+    }
+    if (ts.isIdentifier(node) && /^(?:module|eval|Function)$/.test(node.text)) {
+      failures.push(`${rel}: forbidden dynamic-code capability ${node.text}`);
+    }
 
     const accessed = accessPath(node);
+    if (accessed === 'module.require' || accessed.endsWith('.module.require')) {
+      failures.push(`${rel}: forbidden CommonJS require capability`);
+    }
     if (accessed === 'process.env' || accessed.startsWith('process.env.')) {
       failures.push(`${rel}: forbidden environment capability ${accessed}`);
     }

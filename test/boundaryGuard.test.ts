@@ -67,11 +67,50 @@ describe('canonical Fu boundary guard', () => {
     expect(effect.stderr).toContain('forbidden effect module node:child_process');
   });
 
+  it('rejects computed captured globals and destructured process environment', () => {
+    const captured = runGuard({ 'computed-global.ts': 'const network = globalThis["fetch"]; export { network };\n' });
+    const destructured = runGuard({ 'destructured-env.ts': 'const { env } = process; export const key = env.OPENROUTER_API_KEY;\n' });
+    expect(captured.status).toBe(1);
+    expect(captured.stderr).toContain('forbidden ambient global capability globalThis');
+    expect(destructured.status).toBe(1);
+    expect(destructured.stderr).toContain('forbidden ambient process capability');
+  });
+
+  it('rejects Bun and Deno filesystem capabilities', () => {
+    const bun = runGuard({ 'bun-file.ts': 'export const data = Bun.file("secret.txt");\n' });
+    const deno = runGuard({ 'deno-file.ts': 'export const data = Deno.readFile("secret.txt");\n' });
+    expect(bun.status).toBe(1);
+    expect(bun.stderr).toContain('forbidden ambient runtime capability Bun');
+    expect(deno.status).toBe(1);
+    expect(deno.stderr).toContain('forbidden ambient runtime capability Deno');
+  });
+
+  it('rejects aliased require capabilities', () => {
+    const result = runGuard({ 'aliased-require.ts': 'const load = require; export const signer = load("./aumlokSigner");\n' });
+    const moduleRequire = runGuard({ 'module-require.ts': 'const load = module["require"]; export const signer = load("./aumlokSigner");\n' });
+    const createRequire = runGuard({ 'create-require.ts': 'import { createRequire } from "node:module"; export { createRequire };\n' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('forbidden CommonJS require capability');
+    expect(moduleRequire.status).toBe(1);
+    expect(moduleRequire.stderr).toContain('forbidden dynamic-code capability module');
+    expect(createRequire.status).toBe(1);
+    expect(createRequire.stderr).toContain('forbidden effect module node:module');
+  });
+
+  it('fails closed on malformed TypeScript', () => {
+    const result = runGuard({ 'malformed.ts': 'export const broken = ;\n' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('TypeScript parse diagnostic');
+  });
+
   it('allows filesystem access only in the root spend-ledger module', () => {
     const denied = runGuard({ 'nested/read.ts': 'import fs from "node:fs"; export const read = fs.readFileSync;\n' });
+    const lookalike = runGuard({ 'nested/aukoraFuSpendLedger.ts': 'import fs from "node:fs"; export const read = fs.readFileSync;\n' });
     const allowed = runGuard({ 'aukoraFuSpendLedger.ts': 'import fs from "node:fs"; export const read = fs.readFileSync;\n' });
     expect(denied.status).toBe(1);
     expect(denied.stderr).toContain('forbidden filesystem module node:fs');
+    expect(lookalike.status).toBe(1);
+    expect(lookalike.stderr).toContain('forbidden filesystem module node:fs');
     expect(allowed.status, allowed.stderr).toBe(0);
   });
 });

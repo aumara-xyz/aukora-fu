@@ -34,6 +34,7 @@ interface Review {
   adapterFailure: boolean;
   failureReason?: Reason;
   provider_contacted: boolean;
+  synthetic: boolean;
   durationMs: number;
 }
 
@@ -167,7 +168,7 @@ function extractJson(content: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function coerce(parsed: Record<string, unknown> | null): Omit<Review, "model" | "shard" | "label" | "adapterFailure" | "provider_contacted" | "durationMs"> | null {
+function coerce(parsed: Record<string, unknown> | null): Omit<Review, "model" | "shard" | "label" | "adapterFailure" | "provider_contacted" | "synthetic" | "durationMs"> | null {
   if (!parsed) return null;
   const rawVote = String(parsed.verdict ?? "").toUpperCase().trim();
   if (rawVote !== "GREEN" && rawVote !== "YELLOW" && rawVote !== "RED") return null;
@@ -189,7 +190,7 @@ async function reviewModel(model: string, shard: string, evidence: string, apiKe
   const fail = (reason: Reason, contacted = false, findings = `review failed: ${reason}`): Review => ({
     model, shard, label, verdict: "RED", confidence: 0, findings, risks: "adapter failure/closed state",
     missing_tests: "N/A", recommended_next_commit: "none", adapterFailure: true, failureReason: reason,
-    provider_contacted: contacted, durationMs: Date.now() - started,
+    provider_contacted: contacted, synthetic: false, durationMs: Date.now() - started,
   });
   if (!apiKey) return fail("missing_key");
   try {
@@ -225,7 +226,7 @@ async function reviewModel(model: string, shard: string, evidence: string, apiKe
     if (!parsed) return fail("invalid_json", true);
     const c = coerce(parsed);
     if (!c) return fail("schema_mismatch", true);
-    return { model, shard, label, ...c, adapterFailure: false, provider_contacted: true, durationMs: Date.now() - started };
+    return { model, shard, label, ...c, adapterFailure: false, provider_contacted: true, synthetic: false, durationMs: Date.now() - started };
   } catch (e: any) {
     const reason: Reason = e?.name === "AbortError" ? "network_timeout" : "adapter_failure";
     return fail(reason, true);
@@ -246,7 +247,7 @@ async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency
 }
 
 function classify(r: Review): Vote {
-  if (r.adapterFailure) return "non_vote";
+  if (r.adapterFailure || r.synthetic) return "non_vote";
   return r.verdict;
 }
 
@@ -299,13 +300,26 @@ function mean(ds: Distribution[]): Distribution {
 }
 
 function buildArtifact(results: Review[], council: string[], target: string) {
-  const q = quorum(results);
+  const syntheticCount = results.filter(r => r.synthetic).length;
+  if (syntheticCount > 0 && syntheticCount !== results.length) throw new Error('mixed_synthetic_and_live_results');
+  const synthetic = syntheticCount === results.length && results.length > 0;
+  const q = synthetic
+    ? {
+      status: "SYNTHETIC_SAMPLE",
+      greenVotes: 0,
+      yellowVotes: 0,
+      redVotes: 0,
+      nonVotes: results.length,
+      completedVotes: 0,
+      reason: `Synthetic sample: ${results.length} generated cells, zero providers contacted, not eligible for quorum`,
+    }
+    : quorum(results);
   const cells = results.map(r => {
     const vote = classify(r);
     return {
       model: r.model, shard: r.shard, vote, confidence: vote === "non_vote" ? 0 : r.confidence,
       dist: dist(vote, vote === "non_vote" ? 0 : r.confidence),
-      provider_contacted: r.provider_contacted, adapterFailure: r.adapterFailure,
+      provider_contacted: r.provider_contacted, synthetic: r.synthetic, adapterFailure: r.adapterFailure,
       findingSummary: cleanText(r.adapterFailure ? `non-vote (${r.failureReason ?? "unknown"})` : `${r.findings} ${r.risks}`, 240),
     };
   });
@@ -363,6 +377,10 @@ function buildArtifact(results: Review[], council: string[], target: string) {
     schema: "fusion-run-v1",
     advisoryOnly: true,
     grantsAuthority: false,
+    runMode: synthetic ? "synthetic-sample" : "legacy-live",
+    synthetic,
+    evidenceEligible: false,
+    providerContacted: results.some(r => r.provider_contacted),
     runId,
     createdAt: new Date().toISOString(),
     target,
@@ -379,6 +397,7 @@ function buildArtifact(results: Review[], council: string[], target: string) {
       `council (${council.length}): ${council.join(", ")}`,
       `verdict: ${q.status} - green=${q.greenVotes} yellow=${q.yellowVotes} red=${q.redVotes} nonVotes=${q.nonVotes}`,
       "boundary: advisory-only, grants no authority, no signing, no promotion",
+      synthetic ? "evidence: synthetic sample only; zero providers contacted; no quorum" : "evidence: legacy live artifact; not canonical EvidencePack evidence",
       `target: ${target}`,
     ],
   };
@@ -398,6 +417,15 @@ function forbiddenKey(obj: unknown): string | null {
 function validateArtifact(a: any): { ok: boolean; reason?: string } {
   if (a?.schema !== "fusion-run-v1") return { ok: false, reason: "wrong schema" };
   if (a.advisoryOnly !== true || a.grantsAuthority !== false) return { ok: false, reason: "not advisory-only" };
+  if (a.evidenceEligible !== false) return { ok: false, reason: "legacy artifact must not be evidence-eligible" };
+  if (a.runMode !== "synthetic-sample" && a.runMode !== "legacy-live") return { ok: false, reason: "invalid run mode" };
+  if (a.synthetic === true) {
+    if (a.runMode !== "synthetic-sample" || a.providerContacted !== false) return { ok: false, reason: "synthetic provenance mismatch" };
+    if (a.quorum?.status !== "SYNTHETIC_SAMPLE" || a.quorum?.completedVotes !== 0) return { ok: false, reason: "synthetic quorum mismatch" };
+    if (!Array.isArray(a.cells) || a.cells.some((cell: any) => cell.provider_contacted !== false || cell.synthetic !== true || cell.vote !== "non_vote")) {
+      return { ok: false, reason: "synthetic cell claimed live evidence" };
+    }
+  }
   const bad = forbiddenKey(a);
   if (bad) return { ok: false, reason: `authority/secret-shaped key: ${bad}` };
   const text = JSON.stringify(a);
@@ -436,7 +464,8 @@ function sampleResults(council: string[]): Review[] {
       recommended_next_commit: yellow ? "Improve packaging docs." : "none",
       adapterFailure: non,
       failureReason: non ? "empty_response" as Reason : undefined,
-      provider_contacted: !non,
+      provider_contacted: false,
+      synthetic: true,
       durationMs: Date.now() - now,
     };
   }));

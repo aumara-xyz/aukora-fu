@@ -9,7 +9,7 @@ canonical EvidencePack, transport, observer, and CLI layers are built in reviewe
 - ✅ Hardened advisory council core with offline tests: `npm run verify`.
 - ⚠️ Legacy local shard runner: `bun run legacy:council` (disabled unless explicitly opted in).
 - ✅ Legacy browser observer: `bun run legacy:observer` then open `http://127.0.0.1:9900`.
-- ✅ Legacy demo/sample mode with no API key: `bun run legacy:sample`.
+- ✅ Legacy synthetic sample with no API key or provider contact: `bun run legacy:sample`.
 - ✅ Loopback-only UI (`127.0.0.1:9900`). No microphone, no camera.
 - ✅ **Read-only server**: writes nothing, deletes nothing, runs no tool; guards path traversal to `runs/`.
 - ❌ NOT a kernel organ. It does **not** live in `core/src` and imports **nothing** from the kernel.
@@ -47,7 +47,8 @@ Fu release exists, Symbiote will consume that pinned release instead of maintain
 
        http://127.0.0.1:9900
 
-5. In a second terminal, prove the legacy runner writes a sample run:
+5. In a second terminal, prove the legacy runner writes a clearly marked synthetic sample. Synthetic
+   cells are non-votes, contact no provider, establish no quorum, and are not canonical evidence:
 
        bun run legacy:sample
 
