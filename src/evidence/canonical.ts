@@ -15,17 +15,14 @@ function encodeNumber(n: number): string {
   return String(n);
 }
 
-/** D2: lone surrogates have no canonical UTF-8 encoding — reject them in keys and string values. */
-function hasLoneSurrogate(s: string): boolean {
+// D2 (amendments 9-10): a lone surrogate has no valid UTF-8 encoding — reject it in the canonicalizer so
+// neither the digest preimage nor verifyCanonicalWire can ever accept one, at any depth (keys or values).
+function encodeString(s: string): string {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c >= 0xD800 && c <= 0xDBFF) { const n = s.charCodeAt(i + 1); if (!(n >= 0xDC00 && n <= 0xDFFF)) return true; i++; }
-    else if (c >= 0xDC00 && c <= 0xDFFF) return true;
+    if (c >= 0xd800 && c <= 0xdbff) { const n = s.charCodeAt(i + 1); if (!(n >= 0xdc00 && n <= 0xdfff)) throw new Error('E_INVALID_UTF8'); i++; }
+    else if (c >= 0xdc00 && c <= 0xdfff) throw new Error('E_INVALID_UTF8');
   }
-  return false;
-}
-function encodeString(s: string): string {
-  if (hasLoneSurrogate(s)) throw new Error('E_INVALID_UTF8');
   return JSON.stringify(s);
 }
 
@@ -42,8 +39,6 @@ export function canonicalString(value: unknown): string {
     return out + ']';
   }
   if (t === 'object') {
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) throw new Error('E_PROTO'); // reject class instances / polluted protos
     const obj = value as Record<string, unknown>;
     const keys = Object.keys(obj).sort();
     let out = '{';

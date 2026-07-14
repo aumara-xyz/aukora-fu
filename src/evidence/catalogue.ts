@@ -27,6 +27,19 @@ export const SECRET_CATALOGUE: SecretCatalogueV1 = {
     { id: 'pem-private-key', pattern: '-----BEGIN [A-Z ]*PRIVATE KEY-----', flags: 'g' },
     { id: 'jwt', pattern: 'eyJ[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{6,}', flags: 'g' },
     { id: 'env-secret-assign', pattern: '(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]*\\s*=\\s*\\S{8,}', flags: 'gi' },
+    { id: 'github-token', pattern: '(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}', flags: 'g' },
+    { id: 'slack-token', pattern: 'xox[baprs]-[A-Za-z0-9-]{10,}', flags: 'g' },
+    { id: 'google-api-key', pattern: 'AIza[A-Za-z0-9_\\-]{35}', flags: 'g' },
+    { id: 'stripe-key', pattern: 'sk_(?:live|test)_[A-Za-z0-9]{16,}', flags: 'g' },
+    { id: 'npm-token', pattern: 'npm_[A-Za-z0-9]{30,}', flags: 'g' },
+    { id: 'gitlab-pat', pattern: 'glpat-[A-Za-z0-9_\\-]{16,}', flags: 'g' },
+    { id: 'anthropic-key', pattern: 'sk-ant-[A-Za-z0-9_\\-]{20,}', flags: 'g' },
+    { id: 'sendgrid-key', pattern: 'SG\\.[A-Za-z0-9_\\-]{16,}\\.[A-Za-z0-9_\\-]{16,}', flags: 'g' },
+    { id: 'azure-account-key', pattern: 'AccountKey=[A-Za-z0-9+/]{40,}={0,2}', flags: 'g' },
+    // A URL carrying userinfo credentials (scheme://user:pass@host) — the most common real leak
+    // (postgres/mysql/mongodb/redis/amqp/https connection strings). Shape-based, not entropy-based,
+    // so it never false-positives on legitimate high-entropy file evidence (base64, hashes, minified code).
+    { id: 'url-userinfo-secret', pattern: '[a-z][a-z0-9+.\\-]*://[^\\s/:@]+:[^\\s/@]+@', flags: 'gi' },
   ],
   // Cyrillic/Greek homoglyphs → ASCII skeleton (extend deliberately; each change re-derives catalogueId).
   confusables: {
@@ -60,25 +73,37 @@ export function scanForSecrets(text: string): SecretMatch[] {
   return matches;
 }
 
+// Strip EVERY invisible / default-ignorable / format character (not just the catalogue's core list), so a
+// secret run cannot be split by e.g. U+00AD SOFT HYPHEN, bidi controls, or any other zero-width joiner
+// (red-team hardening). Ordinary whitespace (TAB/LF/CR/space) is deliberately preserved.
+// Also strip Unicode combining marks (\p{M}) — a secret run split by a combining mark would otherwise
+// break a charset regex; stripping them rejoins the run so the scanner still catches it (red-team).
+const INVISIBLE_RE = /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{M}]/gu;
 function stripZeroWidth(s: string): string {
-  let out = s;
-  for (const z of SECRET_CATALOGUE.zeroWidth) out = out.split(z).join('');
-  return out;
+  return s.replace(INVISIBLE_RE, '');
 }
 function confusableSkeleton(s: string): string {
-  let out = '';
-  for (const ch of s) out += (SECRET_CATALOGUE.confusables[ch] ?? ch);
-  return out;
+  let o = '';
+  for (const ch of s) o += (SECRET_CATALOGUE.confusables[ch] ?? ch);
+  return o;
 }
 
-/** The defensive projections a secret might hide behind (contract decision 12; D2 adds the composed
- *  projection so a secret disguised with NFD + zero-width + confusables simultaneously is still caught). */
+/** Defensive projections a secret might hide behind. D2 adds the COMPOSED projection
+ *  confusableSkeleton(stripZeroWidth(NFC(text))) so an attacker cannot layer NFC + zero-width + confusable
+ *  tricks to slip past any single-step projection (amendment 11). Round-14 red-team round 3 adds the two
+ *  COMPATIBILITY projections (NFKC + composed-over-NFKC): fullwidth (U+FF01…), mathematical-alphanumeric
+ *  (U+1D400…), superscript, and circled lookalikes are compatibility-equivalent to ASCII but have NO
+ *  canonical (NFC) decomposition and are absent from the small confusables table, so only NFKC folds them
+ *  back to ASCII where the catalogue regexes match. This closes the whole compatibility-confusable class in
+ *  one step (a proven fullwidth/math-monospace bypass of a real credential). */
 export function secretProjections(text: string): string[] {
   const nfc = text.normalize('NFC');
+  const nfkc = text.normalize('NFKC');
   const zw = stripZeroWidth(text);
   const skeleton = confusableSkeleton(text);
-  const composed = confusableSkeleton(stripZeroWidth(nfc)); // D2 amendment 11
-  return [text, nfc, zw, skeleton, composed];
+  const composed = confusableSkeleton(stripZeroWidth(nfc));
+  const composedK = confusableSkeleton(stripZeroWidth(nfkc));
+  return [text, nfc, nfkc, zw, skeleton, composed, composedK];
 }
 
 /** True if ANY projection of `text` contains a catalogue secret (fail-closed). */

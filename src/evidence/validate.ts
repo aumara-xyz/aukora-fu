@@ -19,15 +19,19 @@ const GITSHA_RE = /^[0-9a-f]{40}$/;
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 const MAP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const AUTHORITY_KEY_RE = /(?:^|[_-])(?:sign|signed|signature|grant|grants|authoriz\w*|token|apply|seed|privatekey|mutate|approve|unlock)(?:[_-]|$)/i;
-/** D2 amendment 4: normalized-substring denylist for open-map keys. A key is lowercased and stripped of
- *  separators (`_ - . space`) before screening, so `Api-Key`, `api_key`, `A p i K e y` all collapse to
- *  `apikey`. Any of these families as a substring refuses the map. */
-const MAP_KEY_DENY = [
-  'apikey', 'signingkey', 'privatekey', 'accesstoken', 'bearertoken', 'credential', 'password',
-  'secret', 'seed', 'token', 'approve', 'apply', 'grant', 'unlock', 'mutate', 'signature',
-  'sign', 'signed', 'signing', 'authoriz',
+
+// D2 (amendment 4): normalize an open-map key (lowercase, strip separators) before screening, so camelCase
+// families like `apiKey`/`signingKey` cannot slip past a separator-anchored regex.
+const AUTHORITY_TERMS = [
+  'apikey', 'signingkey', 'privatekey', 'accesstoken', 'bearertoken', 'credential', 'password', 'secret',
+  'seed', 'token', 'approve', 'apply', 'grant', 'grants', 'unlock', 'mutate', 'signature', 'signed', 'sign',
+  'authoriz', 'key', 'cert', 'auth', 'pat', 'ssh',
 ];
-function normalizeMapKey(k: string): string { return k.toLowerCase().replace(/[\s._-]/g, ''); }
+function isAuthorityShapedKey(k: string): boolean {
+  const norm = k.toLowerCase().replace(/[._-]/g, '');
+  for (const t of AUTHORITY_TERMS) if (norm.indexOf(t) !== -1) return true;
+  return false;
+}
 
 const PACK_KEYS = ['schema', 'advisoryOnly', 'grantsAuthority', 'repoId', 'headCommit', 'headTree', 'baseCommit', 'baseTree', 'files', 'omissions', 'testRuns', 'rootAllowlist', 'limitsProfileId', 'builderToolVersions', 'catalogueId'];
 const FILE_KEYS = ['path', 'kind', 'originalSizeBytes', 'includedByteStart', 'includedByteEnd', 'truncated', 'fullSha256', 'includedSha256', 'encoding', 'content'];
@@ -37,15 +41,32 @@ const TEST_KEYS = ['command', 'cwdRelative', 'exitCode', 'stdoutSha256', 'stderr
 const encoder = new TextEncoder();
 const OK: ValidationResult = { ok: true };
 function err(code: EvidenceErrorCode, path: string, message: string): ValidationResult { return { ok: false, code, path, message }; }
-function isPlainObject(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v); }
-/** D2 amendments 1-2: accept only ordinary (Object.prototype or null-proto) objects — reject class
- *  instances and prototype-polluted objects, whose inherited members can smuggle authority literals. */
-function isOrdinaryObject(v: unknown): boolean {
-  if (!isPlainObject(v)) return false;
+// D2 (amendment 2): only ordinary or null-prototype objects — reject class instances and prototype pollution.
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 }
-function hasOwn(v: object, k: string): boolean { return Object.prototype.hasOwnProperty.call(v, k); }
+
+/**
+ * D2 red-team hardening: the validated key surface must be EXACTLY the canonicalized surface. Canonical
+ * bytes range over Object.keys (own-enumerable string data props). So reject any object with a non-ordinary
+ * prototype (E_PROTO), a symbol own key, a non-enumerable own key, or an accessor (get/set) property — each
+ * of those lets a field be read by validation yet vanish from (or diverge on re-read within) the digest.
+ */
+function ordinaryDataObject(v: unknown, p: string): ValidationResult {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return err('E_NOT_OBJECT', p, 'expected object');
+  const proto = Object.getPrototypeOf(v);
+  if (proto !== Object.prototype && proto !== null) return err('E_PROTO', p, 'non-ordinary prototype');
+  if (Object.getOwnPropertySymbols(v).length > 0) return err('E_PROTO', p, 'symbol own property');
+  const names = Object.getOwnPropertyNames(v);
+  if (names.length !== Object.keys(v).length) return err('E_PROTO', p, 'non-enumerable own property');
+  for (const k of names) {
+    const d = Object.getOwnPropertyDescriptor(v, k);
+    if (!d || d.get !== undefined || d.set !== undefined) return err('E_PROTO', `${p}.${k}`, 'accessor property');
+  }
+  return OK;
+}
 function hasLoneSurrogate(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
@@ -100,7 +121,7 @@ function checkRelPosixPath(v: unknown, p: string): ValidationResult {
   if (str.length === 0 || str.charAt(0) === '/' || str.indexOf('\\') !== -1 || /(?:^|\/)\.\.?(?:\/|$)/.test(str) || /^[A-Za-z]:/.test(str)) {
     return err('E_REL_PATH', p, 'not a relative POSIX path');
   }
-  if (textHasSecret(str)) return err('E_SECRET_CONTENT', p, 'secret-shaped path'); // D2 amendment 5
+  if (textHasSecret(str)) return err('E_SECRET_CONTENT', p, 'secret-shaped path'); // amendment 5
   return OK;
 }
 function checkHex(v: unknown, re: RegExp, code: EvidenceErrorCode, p: string): ValidationResult {
@@ -109,26 +130,24 @@ function checkHex(v: unknown, re: RegExp, code: EvidenceErrorCode, p: string): V
   return OK;
 }
 function closedObject(v: unknown, keys: readonly string[], p: string): ValidationResult {
-  if (!isPlainObject(v)) return err('E_NOT_OBJECT', p, 'expected object');
-  if (!isOrdinaryObject(v)) return err('E_PROTO', p, 'non-ordinary object prototype');
-  for (const k of Object.keys(v)) if (keys.indexOf(k) === -1) return err('E_UNKNOWN_FIELD', `${p}.${k}`, `unknown field ${k}`);
-  for (const k of keys) if (!hasOwn(v, k)) return err('E_MISSING_FIELD', `${p}.${k}`, `missing own field ${k}`);
+  const od = ordinaryDataObject(v, p); if (!od.ok) return od; // amendment 2 + red-team hardening
+  for (const k of Object.keys(v as object)) if (keys.indexOf(k) === -1) return err('E_UNKNOWN_FIELD', `${p}.${k}`, `unknown field ${k}`);
+  // amendment 1: required fields must be OWN properties — an inherited field disappears from canonical
+  // bytes (Object.keys) and would not bind into the digest.
+  for (const k of keys) if (!Object.prototype.hasOwnProperty.call(v as object, k)) return err('E_MISSING_FIELD', `${p}.${k}`, `missing own field ${k}`);
   return OK;
 }
-/** Open string→string map: ASCII-syntax keys (authority-screened + normalized denylist, D2 amendment 4),
- *  NFC + secret-free string values (decision 9 + D2 amendment 5). Ordinary prototype required. */
+/** Open string→string map: ASCII-syntax keys (authority-screened + secret-scanned), NFC secret-free values. */
 function checkStringMap(v: unknown, p: string): ValidationResult {
-  if (!isPlainObject(v)) return err('E_NOT_OBJECT', p, 'expected object');
-  if (!isOrdinaryObject(v)) return err('E_PROTO', p, 'non-ordinary object prototype');
-  for (const k of Object.keys(v)) {
-    if (AUTHORITY_KEY_RE.test(k)) return err('E_AUTHORITY_SHAPED_KEY', `${p}.${k}`, `authority-shaped key ${k}`);
+  const od = ordinaryDataObject(v, p); if (!od.ok) return od;
+  for (const k of Object.keys(v as object)) {
     if (!MAP_KEY_RE.test(k)) return err('E_MAP_KEY', `${p}.${k}`, 'key not pinned-ASCII syntax');
-    const nk = normalizeMapKey(k);
-    for (const bad of MAP_KEY_DENY) if (nk.indexOf(bad) !== -1) return err('E_MAP_KEY_DENY', `${p}.${k}`, `denied key family ${bad}`);
+    if (isAuthorityShapedKey(k)) return err('E_AUTHORITY_SHAPED_KEY', `${p}.${k}`, `authority-shaped key ${k}`);
+    if (textHasSecret(k)) return err('E_SECRET_CONTENT', `${p}.${k}`, 'secret-shaped map key'); // red-team: keys too
     const val = (v as Record<string, unknown>)[k];
     const cv = checkString(val, `${p}.${k}`); if (!cv.ok) return cv;
     if (!isNfc(val as string)) return err('E_MAP_VALUE_NFC', `${p}.${k}`, 'value not NFC');
-    if (textHasSecret(val as string)) return err('E_SECRET_CONTENT', `${p}.${k}`, 'secret-shaped map value');
+    if (textHasSecret(val as string)) return err('E_SECRET_CONTENT', `${p}.${k}`, 'secret-shaped map value'); // amendment 5
   }
   return OK;
 }
@@ -200,12 +219,12 @@ function checkTest(v: unknown, p: string): ValidationResult {
   for (let i = 0; i < o.command.length; i++) {
     const cs = checkString(o.command[i], `${p}.command[${i}]`); if (!cs.ok) return cs;
     if (!isNfc(o.command[i] as string)) return err('E_NOT_NFC', `${p}.command[${i}]`, 'argv not NFC');
-    if (textHasSecret(o.command[i] as string)) return err('E_SECRET_CONTENT', `${p}.command[${i}]`, 'secret-shaped argv'); // D2 amendment 5
+    if (textHasSecret(o.command[i] as string)) return err('E_SECRET_CONTENT', `${p}.command[${i}]`, 'secret-shaped argv'); // amendment 5
   }
   const cw = checkString(o.cwdRelative, `${p}.cwdRelative`); if (!cw.ok) return cw;
   const cwd = o.cwdRelative as string;
-  if (textHasSecret(cwd)) return err('E_SECRET_CONTENT', `${p}.cwdRelative`, 'secret-shaped cwd'); // D2 amendment 5
   if (cwd !== '.') { const cr = checkRelPosixPath(cwd, `${p}.cwdRelative`); if (!cr.ok) return err('E_CWD', `${p}.cwdRelative`, 'cwd must be relative POSIX or "."'); }
+  if (textHasSecret(cwd)) return err('E_SECRET_CONTENT', `${p}.cwdRelative`, 'secret-shaped cwd'); // amendment 5
   if (!safeInt(o.exitCode)) return err('E_BAD_INTEGER', `${p}.exitCode`, 'int');
   const so = checkHex(o.stdoutSha256, SHA256_RE, 'E_BAD_SHA', `${p}.stdoutSha256`); if (!so.ok) return so;
   const se = checkHex(o.stderrSha256, SHA256_RE, 'E_BAD_SHA', `${p}.stderrSha256`); if (!se.ok) return se;
@@ -214,14 +233,13 @@ function checkTest(v: unknown, p: string): ValidationResult {
   const ex = checkString(o.stdoutExcerpt, `${p}.stdoutExcerpt`); if (!ex.ok) return ex;
   const ee = checkString(o.stderrExcerpt, `${p}.stderrExcerpt`); if (!ee.ok) return ee;
   if (textHasSecret(o.stdoutExcerpt as string) || textHasSecret(o.stderrExcerpt as string)) return err('E_SECRET_CONTENT', `${p}.excerpt`, 'secret-shaped test excerpt');
-  // D2 amendment 8: an excerpt can never exceed its stream; a stream-length excerpt IS the whole stream,
-  // so it must hash to the claimed stream digest (defeats "tiny honest stream, huge lying excerpt").
-  const outLen = utf8Len(o.stdoutExcerpt as string);
-  if (outLen > (o.stdoutBytes as number)) return err('E_STREAM_EXCERPT', `${p}.stdoutExcerpt`, 'excerpt exceeds stdout stream bytes');
-  if (outLen === (o.stdoutBytes as number) && sha256Hex(encoder.encode(o.stdoutExcerpt as string)) !== o.stdoutSha256) return err('E_STREAM_EXCERPT', `${p}.stdoutSha256`, 'complete stdout excerpt must hash to stdoutSha256');
-  const errLen = utf8Len(o.stderrExcerpt as string);
-  if (errLen > (o.stderrBytes as number)) return err('E_STREAM_EXCERPT', `${p}.stderrExcerpt`, 'excerpt exceeds stderr stream bytes');
-  if (errLen === (o.stderrBytes as number) && sha256Hex(encoder.encode(o.stderrExcerpt as string)) !== o.stderrSha256) return err('E_STREAM_EXCERPT', `${p}.stderrSha256`, 'complete stderr excerpt must hash to stderrSha256');
+  // amendment 8 (red-team-tightened): the excerpt IS the committed stream — a truncated excerpt's full-stream
+  // hash is unverifiable without the preimage, so bind ALWAYS: byteLength and sha256 must match the claim.
+  const soExc = o.stdoutExcerpt as string, seExc = o.stderrExcerpt as string;
+  if (utf8Len(soExc) !== (o.stdoutBytes as number)) return err('E_STREAM_LENGTH', `${p}.stdoutExcerpt`, 'excerpt bytes != claimed stdout bytes');
+  if (sha256Hex(encoder.encode(soExc)) !== o.stdoutSha256) return err('E_STREAM_HASH', `${p}.stdoutSha256`, 'excerpt hash != claimed stdout sha');
+  if (utf8Len(seExc) !== (o.stderrBytes as number)) return err('E_STREAM_LENGTH', `${p}.stderrExcerpt`, 'excerpt bytes != claimed stderr bytes');
+  if (sha256Hex(encoder.encode(seExc)) !== o.stderrSha256) return err('E_STREAM_HASH', `${p}.stderrSha256`, 'excerpt hash != claimed stderr sha');
   if (o.durationMs !== null && !safeIntGE0(o.durationMs)) return err('E_BAD_INTEGER', `${p}.durationMs`, 'int>=0|null');
   const tv = checkStringMap(o.toolVersions, `${p}.toolVersions`); if (!tv.ok) return tv;
   return OK;
@@ -260,8 +278,8 @@ export function validatePackBody(x: unknown): ValidationResult {
   if (b.grantsAuthority !== false) return err('E_ADVISORY_LITERAL', 'body.grantsAuthority', 'must be literal false');
 
   const cr = checkString(b.repoId, 'body.repoId'); if (!cr.ok) return cr;
-  if (!isNfc(b.repoId as string)) return err('E_NOT_NFC', 'body.repoId', 'repoId not NFC'); // D2 amendment 14
-  if (textHasSecret(b.repoId as string)) return err('E_SECRET_CONTENT', 'body.repoId', 'secret-shaped repoId'); // D2 amendment 5
+  if (!isNfc(b.repoId as string)) return err('E_NOT_NFC', 'body.repoId', 'repoId not NFC'); // amendment 12
+  if (textHasSecret(b.repoId as string)) return err('E_SECRET_CONTENT', 'body.repoId', 'secret-shaped repoId'); // amendment 5
   const ch = checkHex(b.headCommit, GITSHA_RE, 'E_BAD_GITSHA', 'body.headCommit'); if (!ch.ok) return ch;
   const ct = checkHex(b.headTree, GITSHA_RE, 'E_BAD_GITSHA', 'body.headTree'); if (!ct.ok) return ct;
   const baseNull = b.baseCommit === null && b.baseTree === null;
@@ -288,7 +306,9 @@ export function validatePackBody(x: unknown): ValidationResult {
   const cli = checkString(b.limitsProfileId, 'body.limitsProfileId'); if (!cli.ok) return cli;
   const profile = LIMITS_PROFILES[b.limitsProfileId as string];
   if (!profile) return err('E_LIMIT_PROFILE', 'body.limitsProfileId', 'unknown limits profile');
-  if ((b.rootAllowlist as string[]).length > profile.maxFiles) return err('E_LIMIT_FILES', 'body.rootAllowlist', 'rootAllowlist exceeds maxFiles'); // D2 amendment 3
+  // amendment 3: the file ceiling is TOTAL — the exact partition makes rootAllowlist = files ∪ omissions,
+  // so cap the allowlist length (a large omissions[] can no longer bypass maxFiles).
+  if ((b.rootAllowlist as string[]).length > profile.maxFiles) return err('E_LIMIT_ALLOWLIST', 'body.rootAllowlist', 'files + omissions exceeds maxFiles');
 
   const cbt2 = checkStringMap(b.builderToolVersions, 'body.builderToolVersions'); if (!cbt2.ok) return cbt2;
   const cci = checkHex(b.catalogueId, SHA256_RE, 'E_BAD_SHA', 'body.catalogueId'); if (!cci.ok) return cci;

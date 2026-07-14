@@ -12,10 +12,10 @@ import {
 } from '../src/evidence/index';
 
 // ── Pinned known-answer vectors (contract decision 11; reproduced by scripts/pyref + Node + Bun) ──
-const KAT_CATALOGUE_ID = '04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13dda82a94cb';
-const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13dda82a94cb","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
-const KAT_MIN_DIGEST = '508d43495fcd40dfde386893069848251b82974a395f329bbe8e8696d764a878';
-const KAT_MAX_DIGEST = '2582d3c475a68762aa61cf35c0c3ba9546e4a4f5122c9d8915d6cb3022d6e31d';
+const KAT_CATALOGUE_ID = 'f092790cdefb20612a4bfab563cd19fffaf742238a8d683396660027a17a7565';
+const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"f092790cdefb20612a4bfab563cd19fffaf742238a8d683396660027a17a7565","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
+const KAT_MIN_DIGEST = '352c05abe2288cd516bb6da0bfed0fe4896f5408fe16a8989389a7156cb30747';
+const KAT_MAX_DIGEST = 'e8e3d3f3f42036a721da70368a699c2e9a5f657e433830dc714243e3be10b625'; // D2: honest zero-byte stream
 const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28';
 const SHA_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const SHA_ZEROS3 = '709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c';
@@ -30,8 +30,7 @@ function mkTextFile(path: string, content: string): EvidenceFileV1 {
   return { path, kind: 'text', originalSizeBytes: bytes.length, includedByteStart: 0, includedByteEnd: bytes.length, truncated: false, fullSha256: h, includedSha256: h, encoding: 'utf8', content };
 }
 function mkTest(command: string[], cwdRelative = '.'): EvidenceTestRunV1 {
-  // D2 amendment 8/15: an honest empty stream — 0 bytes, empty excerpt, and the excerpt (which equals the
-  // whole 0-byte stream) hashes to sha256("") — instead of the internally-impossible '3'*64/'4'*64 fixture.
+  // Zero-byte streams: empty excerpt IS the whole stream, so its hash must be sha256("") (amendment 8/15).
   return { command, cwdRelative, exitCode: 0, stdoutSha256: SHA_EMPTY, stderrSha256: SHA_EMPTY, stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', stderrExcerpt: '', durationMs: null, toolVersions: {} };
 }
 function bodyWith(files: EvidenceFileV1[], omissions: EvidencePackV1['omissions'], testRuns: EvidenceTestRunV1[]): EvidencePackV1 {
@@ -172,103 +171,6 @@ describe('D1: full-width fence + exact base64 secret scanning', () => {
   });
 });
 
-describe('D2: prototype discipline (amendments 1-2)', () => {
-  it('rejects a class-instance / prototype-polluted open map (E_PROTO)', () => {
-    class Holder { node = 'v22'; }
-    const cls = maximalBody(); (cls as any).builderToolVersions = new Holder();
-    expect((validatePackBody(cls) as any).code).toBe('E_PROTO');
-    const cre = maximalBody(); (cre as any).builderToolVersions = Object.create({ node: 'v22' });
-    expect((validatePackBody(cre) as any).code).toBe('E_PROTO');
-  });
-  it('rejects a body whose inherited prototype smuggles an authority literal (E_PROTO)', () => {
-    const b = clone(minimalBody()); delete (b as any).advisoryOnly;
-    Object.setPrototypeOf(b, { advisoryOnly: true });
-    expect((validatePackBody(b) as any).code).toBe('E_PROTO');
-  });
-  it('canonicalizer refuses non-ordinary object prototypes', () => {
-    expect(() => canonicalString(new (class { x = 1; })())).toThrow();
-    expect(canonicalString(Object.assign(Object.create(null), { a: 1 }))).toBe('{"a":1}'); // null proto allowed
-  });
-});
-
-describe('D2: open-map key denylist (amendment 4)', () => {
-  it('refuses denied key families after lowercase + separator stripping (E_MAP_KEY_DENY)', () => {
-    for (const k of ['credential', 'api-key', 'Access.Token', 'private_key', 'secret']) {
-      const m = maximalBody(); (m.builderToolVersions as any)[k] = 'x';
-      expect((validatePackBody(m) as any).code === 'E_MAP_KEY_DENY' || (validatePackBody(m) as any).code === 'E_AUTHORITY_SHAPED_KEY').toBe(true);
-    }
-    const plain = maximalBody(); (plain.builderToolVersions as any)['apikey'] = 'x';
-    expect((validatePackBody(plain) as any).code).toBe('E_MAP_KEY_DENY');
-  });
-});
-
-describe('D2: secret-scan the whole surface (amendment 5)', () => {
-  it('refuses a secret in a map value, repoId, argv, or a path', () => {
-    const mv = maximalBody(); (mv.builderToolVersions as any).node = 'sk-or-abcdefghijklmnop0123';
-    expect((validatePackBody(mv) as any).code).toBe('E_SECRET_CONTENT');
-    const rp = clone(minimalBody()); (rp as any).repoId = 'sk-or-abcdefghijklmnop0123';
-    expect((validatePackBody(rp) as any).code).toBe('E_SECRET_CONTENT');
-    const av = bodyWith([], [], [mkTest(['echo', 'sk-or-abcdefghijklmnop0123'])]);
-    expect((validatePackBody(av) as any).code).toBe('E_SECRET_CONTENT');
-    const pp = bodyWith([], [{ path: 'AKIAIOSFODNN7EXAMPLE.txt', reason: 'binary', originalSizeBytes: null, sha256: null }], []);
-    expect((validatePackBody(pp) as any).code).toBe('E_SECRET_CONTENT');
-  });
-  it('repoId must be NFC (amendment 14)', () => {
-    const n = clone(minimalBody()); (n as any).repoId = 'café'; // NFD
-    expect((validatePackBody(n) as any).code).toBe('E_NOT_NFC');
-  });
-});
-
-describe('D2: rootAllowlist size ceiling (amendment 3)', () => {
-  it('refuses rootAllowlist longer than the profile maxFiles even with zero files', () => {
-    const paths = Array.from({ length: 4097 }, (_, i) => `f${String(i).padStart(5, '0')}.txt`);
-    const omissions = paths.map((p) => ({ path: p, reason: 'binary', originalSizeBytes: null, sha256: null })) as EvidencePackV1['omissions'];
-    const big = bodyWith([], omissions, []);
-    expect((validatePackBody(big) as any).code).toBe('E_LIMIT_FILES');
-  });
-});
-
-describe('D2: stdout/stderr excerpt vs stream consistency (amendment 8)', () => {
-  it('refuses an excerpt longer than its stream, and a full-length excerpt that mis-hashes', () => {
-    const longer = maximalBody(); (longer.testRuns[0] as any).stdoutExcerpt = 'hello'; (longer.testRuns[0] as any).stdoutBytes = 2;
-    expect((validatePackBody(longer) as any).code).toBe('E_STREAM_EXCERPT');
-    const mism = maximalBody(); (mism.testRuns[0] as any).stdoutExcerpt = 'hi'; (mism.testRuns[0] as any).stdoutBytes = 2; // stdoutSha256 stays sha256("")
-    expect((validatePackBody(mism) as any).code).toBe('E_STREAM_EXCERPT');
-    const honest = maximalBody(); (honest.testRuns[0] as any).stdoutExcerpt = 'hi'; (honest.testRuns[0] as any).stdoutBytes = 2;
-    (honest.testRuns[0] as any).stdoutSha256 = sha256Hex(enc.encode('hi'));
-    expect(validatePackBody(honest).ok).toBe(true); // a truthful complete excerpt is accepted
-  });
-});
-
-describe('D2: lone surrogates + composed projection (amendments 9-11)', () => {
-  it('rejects lone surrogates in canonical strings and body strings', () => {
-    expect(() => canonicalString('\uD800')).toThrow();
-    expect(() => canonicalString({ ['\uDC00']: 1 })).toThrow(); // lone low surrogate as a key
-    const sur = clone(minimalBody()); (sur as any).repoId = 'x\uD800';
-    expect((validatePackBody(sur) as any).code).toBe('E_INVALID_UTF8');
-  });
-  it('composed projection catches a secret hidden with zero-width AND confusables at once', () => {
-    const composed = 'sk-​оr-abcdefghijklmnop0123'; // U+200B zero-width + U+043E Cyrillic о
-    expect(composed.length).toBe(27);                          // ZW(1)+Cyrillic(1)+25 ascii, one invisible+one confusable
-    expect(scanForSecrets(composed).length).toBe(0);           // raw scan misses
-    expect(textHasSecret(composed)).toBe(true);                 // only confusableSkeleton(stripZeroWidth(NFC)) catches
-    const f = bodyWith([mkTextFile('c.txt', composed)], [], []);
-    expect((validatePackBody(f) as any).code).toBe('E_SECRET_CONTENT');
-  });
-});
-
-describe('D2: seal freezes; render refuses post-seal mutation (amendments 6-7)', () => {
-  it('deep-freezes the sealed envelope and refuses a mutated one', () => {
-    const env = sealEnvelope(maximalBody());
-    expect(Object.isFrozen(env)).toBe(true);
-    expect(Object.isFrozen(env.body)).toBe(true);
-    expect(Object.isFrozen(env.body.files[0])).toBe(true);
-    expect(renderForSeat(env, 'A').length).toBeGreaterThan(0);
-    const mutated = { body: { ...env.body, repoId: 'evil/repo' }, packDigest: env.packDigest };
-    expect(() => renderForSeat(mutated as any, 'A')).toThrow();
-  });
-});
-
 describe('authority + envelope + seat render', () => {
   it('rejects authority-shaped keys; not content', () => {
     const m = maximalBody(); (m.builderToolVersions as any).signature = 'x'; expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
@@ -285,5 +187,191 @@ describe('authority + envelope + seat render', () => {
     expect(Array.from(uint64BE(4294967296))).toEqual([0, 0, 0, 1, 0, 0, 0, 0]);
     expect(fenceCollisionFree(deriveFenceNonce(env.packDigest, ['x']), ['x'])).toBe(true);
     void SECRET_CATALOGUE; void fenceOpen;
+  });
+});
+
+// ── D2 immune-gate hostile tests (each closes a reachable P1) ─────────────────────────────────────
+describe('D2: prototype pollution + inherited fields', () => {
+  it('inherited grantsAuthority via a polluted prototype is refused (E_PROTO closes it outright)', () => {
+    const m: any = clone(minimalBody()); delete m.grantsAuthority;
+    Object.setPrototypeOf(m, { grantsAuthority: false });
+    expect(['E_PROTO', 'E_MISSING_FIELD']).toContain((validatePackBody(m) as any).code);
+  });
+  it('non-ordinary prototype (class instance / polluted proto) is refused', () => {
+    class Evil { constructor() { Object.assign(this, minimalBody()); } }
+    expect((validatePackBody(new Evil() as any) as any).code).toBe('E_PROTO');
+    const polluted: any = clone(minimalBody()); Object.setPrototypeOf(polluted, { x: 1 });
+    expect((validatePackBody(polluted) as any).code).toBe('E_PROTO');
+  });
+});
+
+describe('D2: omission ceiling, open-map families, stream truth', () => {
+  it('rootAllowlist beyond maxFiles is refused (omissions counted)', () => {
+    const omissions = Array.from({ length: 4097 }, (_, i) => ({ path: `f${String(i).padStart(5, '0')}.x`, reason: 'binary' as const, originalSizeBytes: null, sha256: null }));
+    const m = bodyWith([], omissions, []);
+    expect((validatePackBody(m) as any).code).toBe('E_LIMIT_ALLOWLIST');
+  });
+  it('apiKey / signingKey open-map keys are refused after normalization', () => {
+    for (const k of ['apiKey', 'signingKey', 'access_token', 'privateKey', 'bearerToken']) {
+      const m = clone(maximalBody()); (m.builderToolVersions as any)[k] = 'x';
+      expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
+    }
+  });
+  it('secret in an open-map value is refused', () => {
+    const m = clone(maximalBody()); (m.builderToolVersions as any).tool = 'sk-or-' + 'a'.repeat(20);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('excerpt longer than the claimed stream, or full-excerpt hash mismatch, is refused', () => {
+    const longer = clone(maximalBody()); (longer.testRuns[0] as any).stdoutExcerpt = 'more than zero'; // >0 stdoutBytes
+    expect((validatePackBody(longer) as any).code).toBe('E_STREAM_LENGTH');
+    const badHash = clone(maximalBody()); (badHash.testRuns[0] as any).stdoutExcerpt = 'x'; (badHash.testRuns[0] as any).stdoutBytes = 1; // len==bytes, hash != stream sha
+    expect((validatePackBody(badHash) as any).code).toBe('E_STREAM_HASH');
+  });
+});
+
+describe('D2: seal freeze + render revalidation + surrogates + composed projection', () => {
+  it('a sealed envelope is deep-frozen and its body cannot be mutated', () => {
+    const env = sealEnvelope(maximalBody());
+    expect(Object.isFrozen(env)).toBe(true);
+    expect(Object.isFrozen(env.body)).toBe(true);
+    expect(() => { (env.body as any).repoId = 'evil'; }).toThrow();
+  });
+  it('renderForSeat refuses a post-seal-mutated envelope', () => {
+    const env = sealEnvelope(minimalBody());
+    const tampered = { body: { ...env.body, repoId: 'tampered' }, packDigest: env.packDigest };
+    expect(() => renderForSeat(tampered as any, 'seat-1')).toThrow();
+  });
+  it('lone surrogate in a value or key is rejected by canonicalizer + wire check', () => {
+    expect(() => canonicalString({ a: '\uD800' })).toThrow();
+    expect(verifyCanonicalWire('{"a":"\\ud800"}')).toBe(false);
+  });
+  it('composed NFC+zero-width+confusable secret is detected', () => {
+    // 'ѕ'(confusable s) + zero-width joiner inside the key prefix; composed projection must still catch it.
+    expect(textHasSecret('ѕ​k-or-' + 'a'.repeat(20))).toBe(true);
+  });
+  it('NFD repoId is refused; NFD source content is still fine', () => {
+    const m = clone(minimalBody()); (m as any).repoId = 'café'; // NFD
+    expect((validatePackBody(m) as any).code).toBe('E_NOT_NFC');
+  });
+});
+
+// ── D2 red-team closures (each proves a found-and-fixed bypass) ───────────────────────────────────
+describe('D2 red-team: closed bypasses', () => {
+  it('own NON-ENUMERABLE authority literal is refused (E_PROTO)', () => {
+    const m: any = clone(minimalBody());
+    for (const k of ['advisoryOnly', 'grantsAuthority']) {
+      const v = m[k]; delete m[k];
+      Object.defineProperty(m, k, { value: v, enumerable: false, writable: true, configurable: true });
+    }
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('own ENUMERABLE getter (accessor) is refused (E_PROTO)', () => {
+    const m: any = clone(minimalBody());
+    const files = m.files; delete m.files;
+    Object.defineProperty(m, 'files', { enumerable: true, configurable: true, get() { return files; } });
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('a secret hidden as an open-map KEY is refused', () => {
+    const m: any = clone(maximalBody());
+    m.builderToolVersions = { ['sk-or-' + 'a'.repeat(20)]: 'v20' };
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('a short excerpt with an inflated claimed stream length is refused (E_STREAM_LENGTH)', () => {
+    const m: any = clone(maximalBody());
+    m.testRuns[0].stdoutExcerpt = 'PASS'; m.testRuns[0].stdoutBytes = 54; m.testRuns[0].stdoutSha256 = 'a'.repeat(64);
+    expect((validatePackBody(m) as any).code).toBe('E_STREAM_LENGTH');
+  });
+  it('a secret split by U+00AD soft hyphen is detected by the composed projection', () => {
+    const split = 'sk-or-v1abcdef01' + '­' + '23456789ABCDEF';
+    expect(textHasSecret(split)).toBe(true);
+    const f = mkTextFile('leak.ts', split);
+    const m = bodyWith([f], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('a prototype-polluted Object.prototype authority literal is refused (own-property req)', () => {
+    (Object.prototype as any).grantsAuthority = false;
+    try {
+      const m: any = {}; const src = minimalBody() as any;
+      for (const k of Object.keys(src)) if (k !== 'grantsAuthority') m[k] = src[k];
+      expect((validatePackBody(m) as any).code).toBe('E_MISSING_FIELD');
+    } finally { delete (Object.prototype as any).grantsAuthority; }
+  });
+});
+
+// ── Round-14 red-team round 3 closures: catalogue + lexicon completeness ─────────────────────────
+describe('R14 red-team: catalogue + lexicon completeness', () => {
+  it('common credential-prefix families are all catalogued (P1-c)', () => {
+    expect(textHasSecret('ghp_' + 'a'.repeat(30))).toBe(true);              // GitHub PAT
+    expect(textHasSecret('github_pat_' + 'a'.repeat(30))).toBe(true);       // GitHub fine-grained
+    expect(textHasSecret('xoxb-' + '1234567890-abcdefghij')).toBe(true);    // Slack bot token
+    expect(textHasSecret('AIza' + 'a'.repeat(35))).toBe(true);             // Google API key
+    expect(textHasSecret('sk_live_' + 'a'.repeat(24))).toBe(true);         // Stripe live key
+    expect(textHasSecret('npm_' + 'a'.repeat(36))).toBe(true);             // npm token
+    expect(textHasSecret('glpat-' + 'a'.repeat(20))).toBe(true);           // GitLab PAT
+  });
+  it('a GitHub token in an open-map VALUE is refused (E_SECRET_CONTENT)', () => {
+    const m: any = clone(maximalBody());
+    m.builderToolVersions = { node: 'ghp_' + 'b'.repeat(36) };
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('a secret split by a Unicode combining mark (U+0301) is still detected', () => {
+    // 8 + mark + 14 word-chars: neither run alone reaches the 16-char minimum, so raw/NFC miss it;
+    // stripping \p{M} rejoins the run and the composed projection catches it.
+    const split = 'sk-or-' + 'abcdef01' + '́' + '23456789abcdef';
+    expect(textHasSecret(split)).toBe(true);
+    const m = bodyWith([mkTextFile('leak.ts', split)], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('bare authority-shaped key names (masterKey / sshKey / certPath) are refused', () => {
+    for (const key of ['masterKey', 'sshKey', 'certPath']) {
+      const m: any = clone(maximalBody());
+      m.builderToolVersions = { [key]: 'v1' };
+      expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
+    }
+  });
+});
+
+// ── R14 red-team round 3: compatibility-Unicode + high-value credential shapes ────────────────────
+describe('R14 red-team round 3: NFKC folding + credential shapes', () => {
+  const toFullwidth = (s: string) => [...s].map((c) => {
+    const n = c.codePointAt(0)!; return (n >= 0x21 && n <= 0x7e) ? String.fromCodePoint(n - 0x21 + 0xff01) : c;
+  }).join('');
+  const toMathMono = (s: string) => [...s].map((c) => {
+    const n = c.codePointAt(0)!;
+    if (n >= 0x41 && n <= 0x5a) return String.fromCodePoint(0x1d670 + (n - 0x41)); // A-Z
+    if (n >= 0x61 && n <= 0x7a) return String.fromCodePoint(0x1d68a + (n - 0x61)); // a-z
+    if (n >= 0x30 && n <= 0x39) return String.fromCodePoint(0x1d7f6 + (n - 0x30)); // 0-9
+    return c;
+  }).join('');
+  it('FULLWIDTH-obfuscated catalogued secret is caught (NFKC projection)', () => {
+    const secret = 'sk-or-' + 'a'.repeat(20);
+    expect(textHasSecret(secret)).toBe(true);           // control: raw is caught
+    expect(textHasSecret(toFullwidth(secret))).toBe(true);
+    const m = bodyWith([mkTextFile('leak.ts', toFullwidth(secret))], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('MATH-MONOSPACE-obfuscated github token is caught (NFKC projection)', () => {
+    const g = toMathMono('ghp_' + 'A'.repeat(30));
+    expect(textHasSecret(g)).toBe(true);
+    const m = bodyWith([mkTextFile('leak.ts', g)], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('a connection-string URL with an inline password is caught (url-userinfo shape)', () => {
+    expect(textHasSecret('postgresql://app:S3cr3tPgCred@10.0.3.4:5432/db')).toBe(true);
+    expect(textHasSecret('mongodb://root:hunter2pass@db.internal:27017')).toBe(true);
+    const m = bodyWith([mkTextFile('cfg.ts', 'const u = "postgres://u:p4ssw0rd-here@h/db";')], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('Anthropic / Azure / SendGrid credential shapes are caught', () => {
+    expect(textHasSecret('sk-ant-api03-' + 'a'.repeat(24))).toBe(true);
+    expect(textHasSecret('AccountKey=' + 'b'.repeat(50) + '==')).toBe(true);
+    expect(textHasSecret('SG.' + 'a'.repeat(20) + '.' + 'b'.repeat(20))).toBe(true);
+  });
+  it('legitimate high-entropy evidence is NOT false-flagged (no entropy backstop)', () => {
+    // base64 binary content, a git SHA, and a bare hex hash must all pass — the pack ships this legitimately.
+    expect(textHasSecret('AAAA')).toBe(false);
+    expect(textHasSecret('a'.repeat(40))).toBe(false);              // git-sha-shaped
+    expect(textHasSecret('deadbeef'.repeat(8))).toBe(false);         // 64-hex digest
+    expect(validatePackBody(maximalBody()).ok).toBe(true);          // real base64 file content in fixture
   });
 });

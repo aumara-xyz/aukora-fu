@@ -77,17 +77,25 @@ grant, apply, signing, mutation, or authorization field.
 
 ## 13. Honest limitations
 A pure pack cannot prove disk fidelity, provider honesty, or real command execution. It proves
-internal consistency, tamper-evidence, catalogue binding, content/range agreement, limit compliance,
-and secret-free included content — nothing more.
+internal consistency, tamper-evidence, catalogue binding, content/range agreement, and limit compliance.
+
+**Secret scanning is best-effort, not a guarantee.** The scanner refuses content matching a *curated*
+catalogue of known credential shapes, folded through NFC + NFKC + zero-width/combining-mark stripping +
+a confusable skeleton so common Unicode obfuscation cannot dodge a catalogued shape. It deliberately has
+**no generic entropy backstop**: a pack's legitimate purpose is to ship file evidence (base64 binaries,
+minified code, hashes, git SHAs) which is itself high-entropy, so an entropy detector would either
+false-positive on real evidence or be tuned too loose to help. Consequently a *novel* credential format
+with no catalogued shape, or a low-entropy structured secret, can pass. **"No secret found" is advisory —
+never treat it as proof the pack is secret-free.** Adversarial red-teaming (Round-14) confirmed this bound
+is real; the catalogue was widened in response, but exhaustive detection is impossible by construction.
 
 ## 14. Known-answer vectors (decision 11)
 Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
 `scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
-bytes, its `packDigest` (`508d4349…`), the `catalogueId` (`04b0ae21…`, catalogue v2 — the Python oracle
-now recomputes it from a faithful replica of the catalogue table, not just echoing the pinned constant),
-a maximal-body `packDigest` (D2: `2582d3c4…`, updated because the old zero-byte-stream fixture was
-internally impossible under §D2-amendment-8), and a fence nonce (`3a23cb4c…a706ccf9…` (full 64-hex) for
-`deriveFenceNonce("00"×32, ["hello","world"])`).
+bytes, its `packDigest` (`352c05ab…`), the `catalogueId` (`f092790c…`, catalogue v2), a maximal-body
+`packDigest` (`e8e3d3f3…`), and the full-width fence nonce
+`3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28` for `deriveFenceNonce("00"×32,
+["hello","world"])`.
 
 ## Round-12 (Commit D) amendments
 Building on the settled contract, Commit D adds:
@@ -115,36 +123,35 @@ Building on the settled contract, Commit D adds:
   (`TextDecoder("utf-8",{fatal:true})`) and, on success, run the raw/NFC/zero-width/confusable
   projections, which catches a confusable secret inside valid-UTF-8 base64.
 
-## Round-14 (D2) amendments — final pre-merge immune gate
-D2 closes five fresh red-team P1s while remaining `advisoryOnly:true` / `grantsAuthority:false` and pure:
-- **Prototype discipline (1-2):** every closed-schema object must have an ordinary (`Object.prototype` or
-  `null`) prototype and carry its required fields as **own** properties (`hasOwnProperty`); class
-  instances and prototype-polluted objects are refused (`E_PROTO`) — an inherited `advisoryOnly:true` or
-  envelope field can no longer be smuggled via the prototype chain. The canonicalizer enforces the same.
-- **Allowlist ceiling (3):** `rootAllowlist.length <= profile.maxFiles`, independent of `files.length`
-  (`E_LIMIT_FILES`).
-- **Normalized key denylist (4):** open-map keys are lowercased and stripped of `_ - . space` before
-  screening; the families `apiKey, signingKey, privateKey, accessToken, bearerToken, credential,
-  password, secret, seed, token, approve, apply, grant, unlock, mutate, sign(/signed/signing/signature),
-  authoriz*` are refused as a substring (`E_MAP_KEY_DENY`), in addition to the existing boundary-anchored
-  `E_AUTHORITY_SHAPED_KEY` screen.
-- **Whole-surface secret scan (5):** every open-map **value**, `repoId`, each argv element, `cwdRelative`,
-  and every path (file/omission/allowlist) is run through the secret projections, not just file content
-  and test excerpts (`E_SECRET_CONTENT`).
-- **Seal + render integrity (6-7):** `sealEnvelope` digests a **canonical clone** of the accepted body
-  and returns a **recursively frozen** envelope; `renderForSeat` **revalidates** and refuses any invalid
-  or post-seal-mutated envelope (throws `<code>:<path>`).
-- **Excerpt vs stream consistency (8):** for stdout and stderr, `UTF8(excerpt).length <= streamBytes`,
-  and when equal the excerpt IS the whole stream so `SHA256(UTF8(excerpt)) === streamSha256`
-  (`E_STREAM_EXCERPT`). This defeats a truthful tiny stream paired with a lying oversized excerpt.
-- **Lone surrogates (9-10):** the canonicalizer rejects lone surrogates in string keys and values
-  (`E_INVALID_UTF8`) — they have no canonical UTF-8 encoding.
-- **Composed projection (11):** the secret scan adds `confusableSkeleton(stripZeroWidth(NFC(text)))`, so a
-  secret disguised with zero-width joiners **and** confusables **simultaneously** (which slips every
-  single-transform projection) is still caught.
-- **NFC repoId (14):** `repoId` must be NFC (`E_NOT_NFC`).
-- **Honest maximal KAT (15):** the maximal-body stream fixture is now a truthful empty stream
-  (`sha256("")`), and its `packDigest` KAT is updated to `2582d3c4…`, reproduced by the Python oracle.
+## Round-14 (D2) immune-gate amendments
+- **Prototype/inherited discipline:** every closed-schema node must be an ordinary or null-prototype object
+  (`E_PROTO`) with all required fields as **OWN** properties (`E_MISSING_FIELD`) — an inherited authority
+  literal or envelope field cannot validate while vanishing from the canonical (own-key) bytes.
+- **Total file ceiling:** `rootAllowlist.length ≤ maxFiles` (`E_LIMIT_ALLOWLIST`) — since the exact partition
+  makes the allowlist the union of files + omissions, a large `omissions[]` can no longer bypass the ceiling.
+- **Open maps:** keys are normalized (lowercase, separators stripped) before authority screening against an
+  expanded lexicon (`apiKey`, `signingKey`, `privateKey`, `accessToken`, `bearerToken`, credential/password/
+  secret/seed/token/approve/apply/grant/unlock/mutate/signature families); every map **value** is secret-scanned.
+- **Secret scan of all free-text structural channels:** `repoId` (also NFC-asserted), argv, cwd, and every path.
+- **Immutable sealed evidence:** `sealEnvelope` canonical-clones the accepted body (ordinary prototypes, no
+  extra/inherited fields) and recursively **freezes** the envelope; `renderForSeat` **re-validates** and refuses
+  invalid or post-seal-mutated evidence.
+- **Stream truth:** `UTF8(excerpt).length ≤ claimed streamBytes` (`E_STREAM_LENGTH`); when equal, the excerpt
+  IS the whole stream so `SHA256(UTF8(excerpt)) === claimed streamSha` (`E_STREAM_HASH`).
+- **Surrogates + composed projection:** the canonicalizer rejects lone surrogates in keys and values at any
+  depth (so `verifyCanonicalWire` refuses lone-surrogate JSON); a composed
+  `confusableSkeleton(stripZeroWidth(NFC(text)))` projection catches layered obfuscation.
+- **Catalogue + lexicon completeness (red-team round 3):** the secret catalogue adds common credential
+  families — `ghp_`/`github_pat_`, `xox[baprs]-`, `AIza…`, `sk_(live|test)_`, `npm_`, `glpat-`, `sk-ant-`
+  (Anthropic), `SG.…` (SendGrid), `AccountKey=…` (Azure), and a shape-based `scheme://user:pass@` matcher
+  for connection-string / DB-URL leaks (the most common real exposure). The invisible-strip projection also
+  removes Unicode combining marks (`\p{M}`), and two **NFKC** projections were added so fullwidth
+  (`U+FF01…`), mathematical-alphanumeric (`U+1D400…`), superscript, and circled lookalikes fold back to
+  ASCII where the catalogue matches — a proven fullwidth/math-monospace bypass of a live credential.
+  The authority-key lexicon adds the bare `key`/`cert`/`auth`/`pat`/`ssh` families. Each catalogue change
+  re-derives `catalogueId` (and the min/max KAT digests). A generic entropy backstop was **deliberately
+  omitted** — see §13; it would refuse legitimate high-entropy file evidence. Secret detection is
+  best-effort, not exhaustive.
 
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,
@@ -152,5 +159,5 @@ E_AUTHORITY_SHAPED_KEY, E_NOT_NFC, E_REL_PATH, E_NUL, E_INVALID_UTF8, E_BAD_INTE
 E_BAD_GITSHA, E_BASE_PAIR, E_ARRAY_UNSORTED, E_DUP_PATH, E_DUP_TEST, E_BAD_RANGE, E_BINARY_INLINE,
 E_BAD_ENUM, E_CONTENT_LENGTH, E_SECRET_CONTENT, E_OMISSION_REASON, E_LIMIT_PROFILE, E_LIMIT_FILES,
 E_LIMIT_FILE_BYTES, E_LIMIT_PACK_BYTES, E_CATALOGUE_ID, E_DIGEST_MISMATCH, E_HASH_INCLUDED,
-E_HASH_COMPLETE, E_BASE64_NONCANONICAL, E_PARTITION, E_MAP_KEY, E_MAP_VALUE_NFC, E_CWD,
-E_PROTO, E_STREAM_EXCERPT, E_MAP_KEY_DENY`.
+E_HASH_COMPLETE, E_BASE64_NONCANONICAL, E_PARTITION, E_MAP_KEY, E_MAP_VALUE_NFC, E_CWD, E_PROTO,
+E_STREAM_LENGTH, E_STREAM_HASH, E_LIMIT_ALLOWLIST`.

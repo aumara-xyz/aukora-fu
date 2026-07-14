@@ -16,7 +16,7 @@ import { canonicalBytes, canonicalString } from './canonical';
 import { packDigest } from './digest';
 import { validatePackBody, validateEnvelope } from './validate';
 
-/** Recursively freeze so a sealed envelope cannot be mutated in place after validation (D2 amendment 6). */
+/** Recursively freeze an accepted, canonical-cloned value so a sealed envelope cannot be mutated. */
 function deepFreeze<T>(o: T): T {
   if (o !== null && typeof o === 'object') {
     for (const k of Object.keys(o as Record<string, unknown>)) deepFreeze((o as Record<string, unknown>)[k]);
@@ -25,15 +25,16 @@ function deepFreeze<T>(o: T): T {
   return o;
 }
 
-/** Validate a body, then seal it into an envelope over a CANONICAL CLONE of the accepted evidence and
- *  recursively freeze the result (D2 amendment 6): the sealed bytes are exactly what was validated, and
- *  no later in-place mutation of the caller's original object can silently diverge from the digest.
- *  Throws `<code>:<path>` if the body is invalid. */
+/**
+ * Validate a body then seal it. D2 (amendment 6): the accepted body is canonical-cloned (ordinary
+ * prototypes, no inherited or extra properties) and the whole envelope is recursively frozen, so evidence
+ * cannot be mutated after sealing. Throws `<code>:<path>` if the body is invalid.
+ */
 export function sealEnvelope(body: EvidencePackV1): EvidencePackEnvelopeV1 {
   const v = validatePackBody(body);
   if (!v.ok) throw new Error(`${v.code}:${v.path}`);
-  const clone = JSON.parse(canonicalString(body)) as EvidencePackV1; // canonical clone: same bytes, fresh objects
-  return deepFreeze({ body: clone, packDigest: packDigest(clone) });
+  const cloned = JSON.parse(canonicalString(body)) as EvidencePackV1;
+  return deepFreeze({ body: cloned, packDigest: packDigest(cloned) });
 }
 
 /** Digest-echo verification: recompute and compare. Delegates to the full envelope validator. */
@@ -41,12 +42,17 @@ export function verifyEnvelope(env: EvidencePackEnvelopeV1): boolean {
   return validateEnvelope(env).ok;
 }
 
-/** Identical-seat render: the serialized bytes are the same for every seat — no seat-specific data
- *  enters the pack, so the seatId argument can never change the output. D2 amendment 7: revalidate the
- *  envelope and REFUSE anything invalid or mutated after sealing (throws `<code>:<path>`). */
+/**
+ * Identical-seat render. D2 (amendment 7): re-validate the envelope first and REFUSE invalid or
+ * post-seal-mutated evidence, so a mutated body can never be rendered to a seat. The serialized bytes are
+ * identical for every seat — no seat-specific data enters the pack.
+ */
 export function renderForSeat(env: EvidencePackEnvelopeV1, seatId: string): Uint8Array {
-  void seatId;
-  const v = validateEnvelope(env);
+  // Take ONE canonical snapshot up front, then validate and serialize the SAME snapshot — so an accessor
+  // (getter) that returns different values on successive reads cannot pass validation clean yet render dirty.
+  const snap = JSON.parse(canonicalString(env)) as EvidencePackEnvelopeV1;
+  const v = validateEnvelope(snap);
   if (!v.ok) throw new Error(`${v.code}:${v.path}`);
-  return canonicalBytes(env);
+  void seatId;
+  return canonicalBytes(snap);
 }
