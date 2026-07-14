@@ -5,11 +5,11 @@
  * observers, council wiring, spend, UI, signing, or authority. See docs/EVIDENCEPACK_V1.md.
  */
 export * from './types';
-export { canonicalString, canonicalBytes } from './canonical';
+export { canonicalString, canonicalBytes, verifyCanonicalWire } from './canonical';
 export { packDigest, packDigestOfCanonical, sha256Hex, uint64BE, DIGEST_DOMAIN } from './digest';
-export { deriveFenceNonce, fence, fenceOpen, fenceClose, fenceCollisionFree } from './framing';
-export { SECRET_CATALOGUE, catalogueId, scanForSecrets } from './catalogue';
-export { validatePackBody, validateEnvelope, AUTHORITY_KEY_RE } from './validate';
+export { deriveFenceNonce, fence, fenceOpen, fenceClose, fenceCollisionFree, FENCE_DOMAIN } from './framing';
+export { SECRET_CATALOGUE, catalogueId, scanForSecrets, secretProjections, textHasSecret } from './catalogue';
+export { validatePackBody, validateEnvelope, AUTHORITY_KEY_RE, testIdentity } from './validate';
 
 import { EvidencePackV1, EvidencePackEnvelopeV1 } from './types';
 import { canonicalBytes } from './canonical';

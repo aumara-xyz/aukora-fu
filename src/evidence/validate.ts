@@ -1,58 +1,51 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Aukora
 /**
- * Recursive, fail-closed, positive-allow-list validator (Round-11 settled contract). Unknown fields
- * are rejected at every depth including inside arrays. Authority screening applies to object KEYS only
- * — never to string content — so reviewed source may freely discuss signatures, tokens, or grants.
- * Pure: no I/O. Enforces: relative-POSIX + NFC paths, no raw NUL, lowercase exact hashes, safe
- * integers, base commit/tree pairing, closed omission-reason enum, registered limits profile, secret-
- * shaped included content refusal, content-length vs byte range, length-framed unique test identity,
- * bound catalogueId, and aggregate limits.
+ * Recursive, fail-closed, positive-allow-list validator (Round-12 immune gate). Pure: no I/O.
+ * Enforces the settled contract plus the Commit-D amendments: full vs. included content hashes
+ * (recomputed from decoded bytes; equal iff complete), files/omissions/rootAllowlist exact partition,
+ * relative-POSIX + NFC path discipline (file/omission/allowlist paths and test cwd, "." only for cwd),
+ * canonical base64 round-trip, projection-based secret refusal (raw/NFC/zero-width/confusable) over
+ * utf8 content, base64-decoded-as-text, and stdout/stderr excerpts, ASCII open-map keys + NFC values,
+ * UTF-8-byte-length-framed unique test identity, registry-owned limits, bound catalogueId, and no raw NUL.
  */
 import { EVIDENCE_PACK_SCHEMA, EvidenceErrorCode, ValidationResult, OMISSION_REASONS, LIMITS_PROFILES } from './types';
 import { canonicalBytes } from './canonical';
-import { packDigest } from './digest';
-import { catalogueId, scanForSecrets } from './catalogue';
+import { packDigest, sha256Hex } from './digest';
+import { catalogueId, textHasSecret } from './catalogue';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const GITSHA_RE = /^[0-9a-f]{40}$/;
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+const MAP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const AUTHORITY_KEY_RE = /(?:^|[_-])(?:sign|signed|signature|grant|grants|authoriz\w*|token|apply|seed|privatekey|mutate|approve|unlock)(?:[_-]|$)/i;
 
 const PACK_KEYS = ['schema', 'advisoryOnly', 'grantsAuthority', 'repoId', 'headCommit', 'headTree', 'baseCommit', 'baseTree', 'files', 'omissions', 'testRuns', 'rootAllowlist', 'limitsProfileId', 'builderToolVersions', 'catalogueId'];
-const FILE_KEYS = ['path', 'kind', 'originalSizeBytes', 'includedByteStart', 'includedByteEnd', 'truncated', 'sha256', 'encoding', 'content'];
+const FILE_KEYS = ['path', 'kind', 'originalSizeBytes', 'includedByteStart', 'includedByteEnd', 'truncated', 'fullSha256', 'includedSha256', 'encoding', 'content'];
 const OMISSION_KEYS = ['path', 'reason', 'originalSizeBytes', 'sha256'];
-const TEST_KEYS = ['command', 'cwdRelative', 'exitCode', 'stdoutSha256', 'stderrSha256', 'stdoutBytes', 'stderrBytes', 'stdoutExcerpt', 'durationMs', 'toolVersions'];
+const TEST_KEYS = ['command', 'cwdRelative', 'exitCode', 'stdoutSha256', 'stderrSha256', 'stdoutBytes', 'stderrBytes', 'stdoutExcerpt', 'stderrExcerpt', 'durationMs', 'toolVersions'];
 
 const encoder = new TextEncoder();
 const OK: ValidationResult = { ok: true };
-function err(code: EvidenceErrorCode, path: string, message: string): ValidationResult {
-  return { ok: false, code, path, message };
-}
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
+function err(code: EvidenceErrorCode, path: string, message: string): ValidationResult { return { ok: false, code, path, message }; }
+function isPlainObject(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v); }
 function hasLoneSurrogate(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c >= 0xD800 && c <= 0xDBFF) {
-      const n = s.charCodeAt(i + 1);
-      if (!(n >= 0xDC00 && n <= 0xDFFF)) return true;
-      i++;
-    } else if (c >= 0xDC00 && c <= 0xDFFF) { return true; }
+    if (c >= 0xD800 && c <= 0xDBFF) { const n = s.charCodeAt(i + 1); if (!(n >= 0xDC00 && n <= 0xDFFF)) return true; i++; }
+    else if (c >= 0xDC00 && c <= 0xDFFF) return true;
   }
   return false;
 }
 function safeIntGE0(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && !Object.is(v, -0) && v >= 0; }
 function safeInt(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && !Object.is(v, -0); }
 function utf8Len(s: string): number { return encoder.encode(s).length; }
-function base64DecodedLen(s: string): number | null {
+function isNfc(s: string): boolean { return s.normalize('NFC') === s; }
+function decodeBase64Canonical(s: string): Uint8Array | null {
   if (s.length % 4 !== 0 || !BASE64_RE.test(s)) return null;
-  if (s.length === 0) return 0;
-  let pad = 0;
-  if (s.charAt(s.length - 1) === '=') pad++;
-  if (s.charAt(s.length - 2) === '=') pad++;
-  return (s.length / 4) * 3 - pad;
+  const buf = Buffer.from(s, 'base64');
+  if (buf.toString('base64') !== s) return null; // canonical round-trip
+  return new Uint8Array(buf);
 }
 
 function checkString(v: unknown, p: string): ValidationResult {
@@ -62,18 +55,16 @@ function checkString(v: unknown, p: string): ValidationResult {
   return OK;
 }
 function checkRelPosixPath(v: unknown, p: string): ValidationResult {
-  const s = checkString(v, p);
-  if (!s.ok) return s;
+  const s = checkString(v, p); if (!s.ok) return s;
   const str = v as string;
-  if (str.normalize('NFC') !== str) return err('E_NOT_NFC', p, 'path not NFC-normalized');
-  if (str.length === 0 || str.charAt(0) === '/' || str.indexOf('\\') !== -1 || /(?:^|\/)\.\.(?:\/|$)/.test(str) || /^[A-Za-z]:/.test(str)) {
+  if (!isNfc(str)) return err('E_NOT_NFC', p, 'path not NFC');
+  if (str.length === 0 || str.charAt(0) === '/' || str.indexOf('\\') !== -1 || /(?:^|\/)\.\.?(?:\/|$)/.test(str) || /^[A-Za-z]:/.test(str)) {
     return err('E_REL_PATH', p, 'not a relative POSIX path');
   }
   return OK;
 }
 function checkHex(v: unknown, re: RegExp, code: EvidenceErrorCode, p: string): ValidationResult {
-  const s = checkString(v, p);
-  if (!s.ok) return s;
+  const s = checkString(v, p); if (!s.ok) return s;
   if (!re.test(v as string)) return err(code, p, `bad format at ${p}`);
   return OK;
 }
@@ -83,19 +74,22 @@ function closedObject(v: unknown, keys: readonly string[], p: string): Validatio
   for (const k of keys) if (!(k in v)) return err('E_MISSING_FIELD', `${p}.${k}`, `missing field ${k}`);
   return OK;
 }
+/** Open string→string map: ASCII-syntax keys (authority-screened), NFC string values (decision 9). */
 function checkStringMap(v: unknown, p: string): ValidationResult {
   if (!isPlainObject(v)) return err('E_NOT_OBJECT', p, 'expected object');
   for (const k of Object.keys(v)) {
     if (AUTHORITY_KEY_RE.test(k)) return err('E_AUTHORITY_SHAPED_KEY', `${p}.${k}`, `authority-shaped key ${k}`);
-    const ck = checkString(k, `${p}.<key>`); if (!ck.ok) return ck;
-    const cv = checkString((v as Record<string, unknown>)[k], `${p}.${k}`); if (!cv.ok) return cv;
+    if (!MAP_KEY_RE.test(k)) return err('E_MAP_KEY', `${p}.${k}`, 'key not pinned-ASCII syntax');
+    const val = (v as Record<string, unknown>)[k];
+    const cv = checkString(val, `${p}.${k}`); if (!cv.ok) return cv;
+    if (!isNfc(val as string)) return err('E_MAP_VALUE_NFC', `${p}.${k}`, 'value not NFC');
   }
   return OK;
 }
-function checkStringArraySortedUnique(v: unknown, p: string): ValidationResult {
+function checkPathArraySortedUnique(v: unknown, p: string): ValidationResult {
   if (!Array.isArray(v)) return err('E_WRONG_TYPE', p, 'expected array');
   for (let i = 0; i < v.length; i++) {
-    const c = checkString(v[i], `${p}[${i}]`); if (!c.ok) return c;
+    const c = checkRelPosixPath(v[i], `${p}[${i}]`); if (!c.ok) return c;
     if (i > 0) {
       if ((v[i - 1] as string) > (v[i] as string)) return err('E_ARRAY_UNSORTED', `${p}[${i}]`, 'not sorted');
       if ((v[i - 1] as string) === (v[i] as string)) return err('E_DUP_PATH', `${p}[${i}]`, 'duplicate');
@@ -113,24 +107,33 @@ function checkFile(v: unknown, p: string): ValidationResult {
   if (!safeIntGE0(o.includedByteStart)) return err('E_BAD_INTEGER', `${p}.includedByteStart`, 'int>=0');
   if (!safeIntGE0(o.includedByteEnd)) return err('E_BAD_INTEGER', `${p}.includedByteEnd`, 'int>=0');
   if (typeof o.truncated !== 'boolean') return err('E_WRONG_TYPE', `${p}.truncated`, 'boolean');
-  const cs = checkHex(o.sha256, SHA256_RE, 'E_BAD_SHA', `${p}.sha256`); if (!cs.ok) return cs;
-  if (o.encoding !== 'utf8' && o.encoding !== 'base64' && o.encoding !== 'omitted') return err('E_BAD_ENUM', `${p}.encoding`, 'encoding');
+  const cfs = checkHex(o.fullSha256, SHA256_RE, 'E_BAD_SHA', `${p}.fullSha256`); if (!cfs.ok) return cfs;
+  const cis = checkHex(o.includedSha256, SHA256_RE, 'E_BAD_SHA', `${p}.includedSha256`); if (!cis.ok) return cis;
+  if (o.encoding !== 'utf8' && o.encoding !== 'base64') return err('E_BAD_ENUM', `${p}.encoding`, 'encoding');
   const cc = checkString(o.content, `${p}.content`); if (!cc.ok) return cc;
   const start = o.includedByteStart as number, end = o.includedByteEnd as number, orig = o.originalSizeBytes as number;
   if (!(start <= end && end <= orig)) return err('E_BAD_RANGE', p, 'byte range');
   if (o.truncated !== (start > 0 || end < orig)) return err('E_BAD_RANGE', `${p}.truncated`, 'truncated flag inconsistent');
-  if (o.kind === 'binary' && o.encoding === 'utf8') return err('E_BINARY_INLINE', `${p}.encoding`, 'binary inlined as utf8');
-  const included = end - start;
+  if (o.kind === 'binary' && o.encoding !== 'base64') return err('E_BINARY_INLINE', `${p}.encoding`, 'binary must be base64');
+  if (o.kind === 'text' && o.encoding !== 'utf8') return err('E_BINARY_INLINE', `${p}.encoding`, 'text must be utf8');
+
   const content = o.content as string;
+  let bytes: Uint8Array;
+  let scanText: string;
   if (o.encoding === 'utf8') {
-    if (utf8Len(content) !== included) return err('E_CONTENT_LENGTH', `${p}.content`, 'utf8 byte length != range');
-    if (scanForSecrets(content).length > 0) return err('E_SECRET_CONTENT', `${p}.content`, 'secret-shaped included content');
-  } else if (o.encoding === 'base64') {
-    const dl = base64DecodedLen(content);
-    if (dl === null || dl !== included) return err('E_CONTENT_LENGTH', `${p}.content`, 'base64 decoded length != range');
+    bytes = encoder.encode(content);
+    scanText = content;
   } else {
-    if (content !== '' || included !== 0) return err('E_CONTENT_LENGTH', `${p}.content`, 'omitted must be empty with zero range');
+    const decoded = decodeBase64Canonical(content);
+    if (decoded === null) return err('E_BASE64_NONCANONICAL', `${p}.content`, 'non-canonical base64');
+    bytes = decoded;
+    scanText = Buffer.from(decoded).toString('utf8');
   }
+  const included = end - start;
+  if (bytes.length !== included) return err('E_CONTENT_LENGTH', `${p}.content`, 'decoded length != included range');
+  if (sha256Hex(bytes) !== o.includedSha256) return err('E_HASH_INCLUDED', `${p}.includedSha256`, 'included hash mismatch');
+  if (start === 0 && end === orig && o.includedSha256 !== o.fullSha256) return err('E_HASH_COMPLETE', `${p}`, 'complete file: includedSha256 must equal fullSha256');
+  if (textHasSecret(scanText)) return err('E_SECRET_CONTENT', `${p}.content`, 'secret-shaped included content');
   return OK;
 }
 
@@ -148,14 +151,21 @@ function checkTest(v: unknown, p: string): ValidationResult {
   const c = closedObject(v, TEST_KEYS, p); if (!c.ok) return c;
   const o = v as Record<string, unknown>;
   if (!Array.isArray(o.command)) return err('E_WRONG_TYPE', `${p}.command`, 'array');
-  for (let i = 0; i < o.command.length; i++) { const cs = checkString(o.command[i], `${p}.command[${i}]`); if (!cs.ok) return cs; }
+  for (let i = 0; i < o.command.length; i++) {
+    const cs = checkString(o.command[i], `${p}.command[${i}]`); if (!cs.ok) return cs;
+    if (!isNfc(o.command[i] as string)) return err('E_NOT_NFC', `${p}.command[${i}]`, 'argv not NFC');
+  }
   const cw = checkString(o.cwdRelative, `${p}.cwdRelative`); if (!cw.ok) return cw;
+  const cwd = o.cwdRelative as string;
+  if (cwd !== '.') { const cr = checkRelPosixPath(cwd, `${p}.cwdRelative`); if (!cr.ok) return err('E_CWD', `${p}.cwdRelative`, 'cwd must be relative POSIX or "."'); }
   if (!safeInt(o.exitCode)) return err('E_BAD_INTEGER', `${p}.exitCode`, 'int');
   const so = checkHex(o.stdoutSha256, SHA256_RE, 'E_BAD_SHA', `${p}.stdoutSha256`); if (!so.ok) return so;
   const se = checkHex(o.stderrSha256, SHA256_RE, 'E_BAD_SHA', `${p}.stderrSha256`); if (!se.ok) return se;
   if (!safeIntGE0(o.stdoutBytes)) return err('E_BAD_INTEGER', `${p}.stdoutBytes`, 'int>=0');
   if (!safeIntGE0(o.stderrBytes)) return err('E_BAD_INTEGER', `${p}.stderrBytes`, 'int>=0');
   const ex = checkString(o.stdoutExcerpt, `${p}.stdoutExcerpt`); if (!ex.ok) return ex;
+  const ee = checkString(o.stderrExcerpt, `${p}.stderrExcerpt`); if (!ee.ok) return ee;
+  if (textHasSecret(o.stdoutExcerpt as string) || textHasSecret(o.stderrExcerpt as string)) return err('E_SECRET_CONTENT', `${p}.excerpt`, 'secret-shaped test excerpt');
   if (o.durationMs !== null && !safeIntGE0(o.durationMs)) return err('E_BAD_INTEGER', `${p}.durationMs`, 'int>=0|null');
   const tv = checkStringMap(o.toolVersions, `${p}.toolVersions`); if (!tv.ok) return tv;
   return OK;
@@ -176,12 +186,13 @@ function checkArraySorted(v: unknown, p: string, each: (x: unknown, pp: string) 
   return OK;
 }
 
-/** Length-framed injective identity for a test run (contract decision 7). */
+/** UTF-8 byte-length-framed injective identity (contract decision 10). */
 function testIdentity(t: unknown): string {
   const o = t as Record<string, unknown>;
   const cmd = Array.isArray(o.command) ? (o.command as string[]) : [];
-  const parts = cmd.map((a) => `${a.length}:${a}`).join(',');
-  return `${parts}#${String(o.cwdRelative).length}:${String(o.cwdRelative)}`;
+  const parts = cmd.map((a) => `${utf8Len(a)}:${a}`).join(',');
+  const cwd = String(o.cwdRelative);
+  return `${parts}#${utf8Len(cwd)}:${cwd}`;
 }
 
 export function validatePackBody(x: unknown): ValidationResult {
@@ -195,7 +206,6 @@ export function validatePackBody(x: unknown): ValidationResult {
   const cr = checkString(b.repoId, 'body.repoId'); if (!cr.ok) return cr;
   const ch = checkHex(b.headCommit, GITSHA_RE, 'E_BAD_GITSHA', 'body.headCommit'); if (!ch.ok) return ch;
   const ct = checkHex(b.headTree, GITSHA_RE, 'E_BAD_GITSHA', 'body.headTree'); if (!ct.ok) return ct;
-  // base commit/tree: both null, or both valid git shas (contract decision 1).
   const baseNull = b.baseCommit === null && b.baseTree === null;
   if (!baseNull) {
     if (b.baseCommit === null || b.baseTree === null) return err('E_BASE_PAIR', 'body.base', 'baseCommit and baseTree must both be present or both null');
@@ -205,13 +215,17 @@ export function validatePackBody(x: unknown): ValidationResult {
 
   const cf = checkArraySorted(b.files, 'body.files', checkFile, (f) => (f as Record<string, unknown>).path as string, 'E_DUP_PATH'); if (!cf.ok) return cf;
   const co = checkArraySorted(b.omissions, 'body.omissions', checkOmission, (f) => (f as Record<string, unknown>).path as string, 'E_DUP_PATH'); if (!co.ok) return co;
-  const filePaths = new Set((b.files as Array<Record<string, unknown>>).map((f) => f.path as string));
-  for (const om of b.omissions as Array<Record<string, unknown>>) {
-    if (filePaths.has(om.path as string)) return err('E_DUP_PATH', 'body.omissions', `path in files and omissions: ${String(om.path)}`);
-  }
-
   const cte = checkArraySorted(b.testRuns, 'body.testRuns', checkTest, testIdentity, 'E_DUP_TEST'); if (!cte.ok) return cte;
-  const cal = checkStringArraySortedUnique(b.rootAllowlist, 'body.rootAllowlist'); if (!cal.ok) return cal;
+  const cal = checkPathArraySortedUnique(b.rootAllowlist, 'body.rootAllowlist'); if (!cal.ok) return cal;
+
+  // Exact partition: files.path ∪ omissions.path = rootAllowlist, files ∩ omissions = ∅ (decision 6/amendment 6).
+  const filePaths = (b.files as Array<Record<string, unknown>>).map((f) => f.path as string);
+  const omitPaths = (b.omissions as Array<Record<string, unknown>>).map((f) => f.path as string);
+  const union = new Set([...filePaths, ...omitPaths]);
+  if (union.size !== filePaths.length + omitPaths.length) return err('E_PARTITION', 'body', 'files and omissions overlap');
+  const allow = new Set(b.rootAllowlist as string[]);
+  if (union.size !== allow.size) return err('E_PARTITION', 'body.rootAllowlist', 'allowlist != files ∪ omissions');
+  for (const pth of union) if (!allow.has(pth)) return err('E_PARTITION', 'body.rootAllowlist', `path not in allowlist: ${pth}`);
 
   const cli = checkString(b.limitsProfileId, 'body.limitsProfileId'); if (!cli.ok) return cli;
   const profile = LIMITS_PROFILES[b.limitsProfileId as string];
@@ -221,18 +235,15 @@ export function validatePackBody(x: unknown): ValidationResult {
   const cci = checkHex(b.catalogueId, SHA256_RE, 'E_BAD_SHA', 'body.catalogueId'); if (!cci.ok) return cci;
   if (b.catalogueId !== catalogueId()) return err('E_CATALOGUE_ID', 'body.catalogueId', 'catalogueId not bound to the library catalogue');
 
-  // Aggregate limits from the REGISTERED profile — never self-declared (contract decision 6).
   const files = b.files as Array<Record<string, unknown>>;
   if (files.length > profile.maxFiles) return err('E_LIMIT_FILES', 'body.files', 'exceeds maxFiles');
   for (let i = 0; i < files.length; i++) {
     if ((files[i].includedByteEnd as number) - (files[i].includedByteStart as number) > profile.maxFileBytes) return err('E_LIMIT_FILE_BYTES', `body.files[${i}]`, 'included bytes exceed maxFileBytes');
   }
   if (canonicalBytes(b).length > profile.maxPackBytes) return err('E_LIMIT_PACK_BYTES', 'body', 'canonical size exceeds maxPackBytes');
-
   return OK;
 }
 
-/** Full envelope validation: closed { body, packDigest } + body validity + digest echo. */
 export function validateEnvelope(x: unknown): ValidationResult {
   const c = closedObject(x, ['body', 'packDigest'], 'envelope'); if (!c.ok) return c;
   const e = x as Record<string, unknown>;

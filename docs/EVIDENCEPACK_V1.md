@@ -81,13 +81,34 @@ internal consistency, tamper-evidence, catalogue binding, content/range agreemen
 and secret-free included content — nothing more.
 
 ## 14. Known-answer vectors (decision 11)
-Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts`: the minimal-body
-canonical bytes, its `packDigest` (`026c6f84…`), the `catalogueId` (`84c3e084…`), and a fence nonce
-(`3a23cb4c…` for `deriveFenceNonce("00"×32, ["hello","world"])`).
+Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
+`scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
+bytes, its `packDigest` (`508d4349…`), the `catalogueId` (`04b0ae21…`, catalogue v2), a maximal-body
+`packDigest` (`6e8f4360…`), and a fence nonce (`3a23cb4c…` for `deriveFenceNonce("00"×32,
+["hello","world"])`).
+
+## Round-12 (Commit D) amendments
+Building on the settled contract, Commit D adds:
+- **File hashes:** `sha256` → `fullSha256` (full original bytes) + `includedSha256` (recomputed from the
+  **decoded** included content); a complete file (`start=0`, `end=originalSize`) requires
+  `includedSha256 === fullSha256`.
+- **No `encoding:"omitted"`** on files; excluded entries live only in `omissions[]`. `text`⇒`utf8`,
+  `binary`⇒`base64` with a **canonical base64 round-trip**.
+- **Exact partition:** `files.path ∪ omissions.path = rootAllowlist`, `files.path ∩ omissions.path = ∅`.
+- **Path discipline everywhere:** relative-POSIX + NFC for file/omission/allowlist paths and test `cwd`
+  (`"."` allowed only for `cwd`). **No raw NUL** in any string.
+- **Secret projections** (raw, NFC, zero-width-stripped, confusable-skeleton) applied to utf8 content,
+  base64-decoded-as-text, and `stdoutExcerpt`/`stderrExcerpt`; any hit **refuses** the pack.
+- **Open maps:** keys must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`; values must be NFC.
+- **Test identity** length-frames every argv element and cwd by **UTF-8 byte length**; argv NFC-asserted.
+- **Canonicalizer rejects `-0`** outright (decision 14). **Strict canonical-wire verification**
+  (`verifyCanonicalWire`) rejects BOM, leading/trailing/alternate whitespace, duplicate keys, alternate
+  numeric/escape encodings, and malformed Unicode (decision 15).
 
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,
 E_AUTHORITY_SHAPED_KEY, E_NOT_NFC, E_REL_PATH, E_NUL, E_INVALID_UTF8, E_BAD_INTEGER, E_BAD_SHA,
 E_BAD_GITSHA, E_BASE_PAIR, E_ARRAY_UNSORTED, E_DUP_PATH, E_DUP_TEST, E_BAD_RANGE, E_BINARY_INLINE,
 E_BAD_ENUM, E_CONTENT_LENGTH, E_SECRET_CONTENT, E_OMISSION_REASON, E_LIMIT_PROFILE, E_LIMIT_FILES,
-E_LIMIT_FILE_BYTES, E_LIMIT_PACK_BYTES, E_CATALOGUE_ID, E_DIGEST_MISMATCH`.
+E_LIMIT_FILE_BYTES, E_LIMIT_PACK_BYTES, E_CATALOGUE_ID, E_DIGEST_MISMATCH, E_HASH_INCLUDED,
+E_HASH_COMPLETE, E_BASE64_NONCANONICAL, E_PARTITION, E_MAP_KEY, E_MAP_VALUE_NFC, E_CWD`.

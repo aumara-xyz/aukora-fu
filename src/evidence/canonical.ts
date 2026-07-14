@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Aukora
 /**
- * Deterministic canonical serialization (JCS-aligned per docs/EVIDENCEPACK_V1.md §5).
- * Object keys sorted ascending by UTF-16 code unit; arrays preserved as given; numbers must be finite
- * safe integers emitted without exponent/fraction (-0 normalized to 0); strings via JSON escaping;
- * UTF-8 output. Pure — no I/O.
+ * Deterministic canonical serialization (JCS-aligned). Object keys sorted ascending by UTF-16 code
+ * unit; arrays preserved as given; numbers must be finite safe integers with a single spelling; -0 is
+ * REJECTED at the canonicalizer itself (contract decision 14); strings via JSON escaping; UTF-8 output.
+ * Also exposes strict canonical-wire verification (decision 15). Pure — no I/O.
  */
 
 const encoder = new TextEncoder();
 
 function encodeNumber(n: number): string {
-  if (!Number.isFinite(n) || !Number.isSafeInteger(n)) {
-    throw new Error('E_BAD_INTEGER');
-  }
-  return String(n === 0 ? 0 : n); // normalize -0 -> 0
+  if (!Number.isFinite(n) || !Number.isSafeInteger(n)) throw new Error('E_BAD_INTEGER');
+  if (Object.is(n, -0)) throw new Error('E_BAD_INTEGER'); // -0 has no canonical spelling
+  return String(n);
 }
 
 export function canonicalString(value: unknown): string {
@@ -25,10 +24,7 @@ export function canonicalString(value: unknown): string {
   if (t === 'string') return JSON.stringify(value as string);
   if (Array.isArray(value)) {
     let out = '[';
-    for (let i = 0; i < value.length; i++) {
-      if (i > 0) out += ',';
-      out += canonicalString(value[i]);
-    }
+    for (let i = 0; i < value.length; i++) { if (i > 0) out += ','; out += canonicalString(value[i]); }
     return out + ']';
   }
   if (t === 'object') {
@@ -46,4 +42,19 @@ export function canonicalString(value: unknown): string {
 
 export function canonicalBytes(value: unknown): Uint8Array {
   return encoder.encode(canonicalString(value));
+}
+
+/**
+ * Strict canonical-wire verification (contract decision 15): returns true only if `text` is EXACTLY
+ * the canonical serialization of some accepted value. Rejects BOM, leading/trailing/alternate
+ * whitespace, noncanonical escaping, alternate numeric encodings, malformed Unicode, and duplicate
+ * keys (a duplicate collapses on parse, so re-canonicalization can never equal the input).
+ */
+export function verifyCanonicalWire(text: string): boolean {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  if (text.charCodeAt(0) === 0xFEFF) return false;            // BOM
+  if (/^\s/.test(text) || /\s$/.test(text)) return false;      // leading/trailing whitespace
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return false; }
+  try { return canonicalString(parsed) === text; } catch { return false; }
 }

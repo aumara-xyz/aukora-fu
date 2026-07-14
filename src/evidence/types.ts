@@ -35,8 +35,9 @@ export interface EvidenceFileV1 {
   readonly includedByteStart: number;
   readonly includedByteEnd: number;
   readonly truncated: boolean;
-  readonly sha256: string;
-  readonly encoding: 'utf8' | 'base64' | 'omitted';
+  readonly fullSha256: string;      // sha256 over the FULL original bytes
+  readonly includedSha256: string;  // sha256 over the DECODED included content; === fullSha256 iff complete
+  readonly encoding: 'utf8' | 'base64'; // no 'omitted' (contract decision 4 — excluded files go to omissions[])
   readonly content: string;
 }
 
@@ -56,6 +57,7 @@ export interface EvidenceTestRunV1 {
   readonly stdoutBytes: number;
   readonly stderrBytes: number;
   readonly stdoutExcerpt: string;
+  readonly stderrExcerpt: string;
   readonly durationMs: number | null;
   readonly toolVersions: Readonly<Record<string, string>>;
 }
@@ -90,7 +92,8 @@ export const ERROR_CODES = [
   'E_BAD_SHA', 'E_BAD_GITSHA', 'E_BASE_PAIR', 'E_ARRAY_UNSORTED', 'E_DUP_PATH', 'E_DUP_TEST',
   'E_BAD_RANGE', 'E_BINARY_INLINE', 'E_BAD_ENUM', 'E_CONTENT_LENGTH', 'E_SECRET_CONTENT',
   'E_OMISSION_REASON', 'E_LIMIT_PROFILE', 'E_LIMIT_FILES', 'E_LIMIT_FILE_BYTES', 'E_LIMIT_PACK_BYTES',
-  'E_CATALOGUE_ID', 'E_DIGEST_MISMATCH',
+  'E_CATALOGUE_ID', 'E_DIGEST_MISMATCH', 'E_HASH_INCLUDED', 'E_HASH_COMPLETE', 'E_BASE64_NONCANONICAL',
+  'E_PARTITION', 'E_MAP_KEY', 'E_MAP_VALUE_NFC', 'E_CWD',
 ] as const;
 export type EvidenceErrorCode = typeof ERROR_CODES[number];
 
