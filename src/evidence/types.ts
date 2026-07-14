@@ -1,14 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Aukora
 /**
- * EvidencePack v1 — pure types and stable error codes. See docs/EVIDENCEPACK_V1.md (the frozen
- * contract). No filesystem, environment, network, subprocess, or authority. The literal fields
- * advisoryOnly:true / grantsAuthority:false are load-bearing invariants: a pack is evidence, never
- * authority.
+ * EvidencePack v1 — pure types and stable error codes. See docs/EVIDENCEPACK_V1.md (the contract,
+ * Round-11 settled). No filesystem, environment, network, subprocess, or authority. The literal
+ * fields advisoryOnly:true / grantsAuthority:false are load-bearing invariants: a pack is evidence,
+ * never authority.
+ *
+ * Settled contract highlights: snapshot-primary subject (repoId + head + optional base pair, NO
+ * diffSha256); testRuns[] is the only evidence (no narrative claims, no timestamp); the fence is
+ * derived from packDigest at presentation, never stored; catalogueId is bound; security ceilings come
+ * from a registered immutable limits profile, never self-declared; omission reasons are a closed enum.
  */
 
 export const EVIDENCE_PACK_SCHEMA = 'aukora-fu-evidence-pack-v1';
 export type EvidencePackSchema = typeof EVIDENCE_PACK_SCHEMA;
+
+/** Closed enumeration of omission reason codes (contract decision 10 — never narrative prose). */
+export const OMISSION_REASONS = [
+  'outside-root', 'not-in-allowlist', 'symlink', 'non-regular', 'cross-device', 'binary', 'oversize',
+  'secret-file', 'unreadable', 'changed-during-read', 'truncated', 'path-invalid',
+] as const;
+export type OmissionReason = typeof OMISSION_REASONS[number];
+
+/** Immutable registered security-limit profiles (contract decision 6 — packs cannot self-declare). */
+export interface LimitsProfile { readonly maxFileBytes: number; readonly maxPackBytes: number; readonly maxFiles: number; }
+export const LIMITS_PROFILES: Readonly<Record<string, LimitsProfile>> = {
+  'default-v1': { maxFileBytes: 1048576, maxPackBytes: 8388608, maxFiles: 4096 },
+};
 
 export interface EvidenceFileV1 {
   readonly path: string;
@@ -20,12 +38,11 @@ export interface EvidenceFileV1 {
   readonly sha256: string;
   readonly encoding: 'utf8' | 'base64' | 'omitted';
   readonly content: string;
-  readonly secretsRedacted: number;
 }
 
 export interface EvidenceOmissionV1 {
   readonly path: string;
-  readonly reason: string;
+  readonly reason: OmissionReason;
   readonly originalSizeBytes: number | null;
   readonly sha256: string | null;
 }
@@ -43,37 +60,25 @@ export interface EvidenceTestRunV1 {
   readonly toolVersions: Readonly<Record<string, string>>;
 }
 
-export interface EvidenceClaimV1 {
-  readonly id: string;
-  readonly text: string;
-}
-
-export interface EvidenceLimitsV1 {
-  readonly maxFileBytes: number;
-  readonly maxPackBytes: number;
-  readonly maxFiles: number;
-}
-
 export interface EvidencePackV1 {
   readonly schema: EvidencePackSchema;
   readonly advisoryOnly: true;
   readonly grantsAuthority: false;
-  readonly repo: string;
-  readonly baseCommit: string;
+  readonly repoId: string;
   readonly headCommit: string;
   readonly headTree: string;
-  readonly createdAtIso: string;
-  readonly diffSha256: string;
+  readonly baseCommit: string | null;
+  readonly baseTree: string | null;
   readonly files: readonly EvidenceFileV1[];
   readonly omissions: readonly EvidenceOmissionV1[];
-  readonly tests: readonly EvidenceTestRunV1[];
-  readonly claims: readonly EvidenceClaimV1[];
+  readonly testRuns: readonly EvidenceTestRunV1[];
   readonly rootAllowlist: readonly string[];
-  readonly limits: EvidenceLimitsV1;
+  readonly limitsProfileId: string;
   readonly builderToolVersions: Readonly<Record<string, string>>;
-  readonly dataFenceNonce: string;
+  readonly catalogueId: string;
 }
 
+/** The delivered pack: body + its content digest. No timestamp lives here (contract decision 3). */
 export interface EvidencePackEnvelopeV1 {
   readonly body: EvidencePackV1;
   readonly packDigest: string;
@@ -81,9 +86,11 @@ export interface EvidencePackEnvelopeV1 {
 
 export const ERROR_CODES = [
   'E_SCHEMA', 'E_NOT_OBJECT', 'E_MISSING_FIELD', 'E_UNKNOWN_FIELD', 'E_WRONG_TYPE', 'E_ADVISORY_LITERAL',
-  'E_AUTHORITY_SHAPED_KEY', 'E_NOT_NFC', 'E_INVALID_UTF8', 'E_BAD_INTEGER', 'E_BAD_SHA', 'E_BAD_GITSHA',
-  'E_BAD_TIMESTAMP', 'E_ARRAY_UNSORTED', 'E_DUP_PATH', 'E_BAD_RANGE', 'E_BINARY_INLINE', 'E_BAD_ENUM',
-  'E_BAD_HEX', 'E_DIGEST_MISMATCH',
+  'E_AUTHORITY_SHAPED_KEY', 'E_NOT_NFC', 'E_REL_PATH', 'E_NUL', 'E_INVALID_UTF8', 'E_BAD_INTEGER',
+  'E_BAD_SHA', 'E_BAD_GITSHA', 'E_BASE_PAIR', 'E_ARRAY_UNSORTED', 'E_DUP_PATH', 'E_DUP_TEST',
+  'E_BAD_RANGE', 'E_BINARY_INLINE', 'E_BAD_ENUM', 'E_CONTENT_LENGTH', 'E_SECRET_CONTENT',
+  'E_OMISSION_REASON', 'E_LIMIT_PROFILE', 'E_LIMIT_FILES', 'E_LIMIT_FILE_BYTES', 'E_LIMIT_PACK_BYTES',
+  'E_CATALOGUE_ID', 'E_DIGEST_MISMATCH',
 ] as const;
 export type EvidenceErrorCode = typeof ERROR_CODES[number];
 

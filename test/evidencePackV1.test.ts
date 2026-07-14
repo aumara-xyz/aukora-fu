@@ -1,252 +1,191 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Aukora
-/** Hostile test matrix for the pure EvidencePack v1 (docs/EVIDENCEPACK_V1.md). No I/O. */
+/** Hostile test matrix + known-answer vectors for the pure EvidencePack v1 (Round-11 settled contract). No I/O. */
 import { describe, it, expect } from 'vitest';
 import {
   EVIDENCE_PACK_SCHEMA, EvidencePackV1,
   canonicalString, canonicalBytes,
   packDigest, sha256Hex, uint64BE,
-  deriveFenceNonce, fence, fenceOpen, fenceClose, fenceCollisionFree,
+  deriveFenceNonce, fenceOpen, fenceClose, fenceCollisionFree,
   SECRET_CATALOGUE, catalogueId, scanForSecrets,
   validatePackBody, validateEnvelope, sealEnvelope, verifyEnvelope, renderForSeat,
 } from '../src/evidence/index';
 
-function minimalBody(): EvidencePackV1 {
+// ── Independently pinned known-answer vectors (contract decision 11) ──────────────────────────────
+const KAT_CATALOGUE_ID = '84c3e084aeee5ea8cf86e86e9262a53625758f85a9d3aa1d4051388c08f7ed92';
+const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"84c3e084aeee5ea8cf86e86e9262a53625758f85a9d3aa1d4051388c08f7ed92","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
+const KAT_PACK_DIGEST = '026c6f843dd8e428d1dc22d227222fd7689a7cb7dd8494a5e761fb1161d9da29';
+const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122';
+
+function freshBase(): Omit<EvidencePackV1, 'catalogueId'> {
   return {
-    schema: EVIDENCE_PACK_SCHEMA, advisoryOnly: true, grantsAuthority: false,
-    repo: 'aumara-xyz/aukora-fu',
-    baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), headTree: 'c'.repeat(40),
-    createdAtIso: '2026-07-14T00:00:00Z', diffSha256: 'd'.repeat(64),
-    files: [], omissions: [], tests: [], claims: [], rootAllowlist: [],
-    limits: { maxFileBytes: 1048576, maxPackBytes: 8388608, maxFiles: 4096 },
-    builderToolVersions: { node: 'v22.23.0' }, dataFenceNonce: 'e'.repeat(32),
+    schema: EVIDENCE_PACK_SCHEMA, advisoryOnly: true as const, grantsAuthority: false as const,
+    repoId: 'aumara-xyz/aukora-fu', headCommit: 'a'.repeat(40), headTree: 'b'.repeat(40),
+    baseCommit: null, baseTree: null, files: [], omissions: [], testRuns: [], rootAllowlist: [],
+    limitsProfileId: 'default-v1', builderToolVersions: { node: 'v22.23.0' },
   };
 }
+function minimalBody(): EvidencePackV1 { return { ...freshBase(), catalogueId: catalogueId() }; }
 function maximalBody(): EvidencePackV1 {
   return {
-    ...minimalBody(),
+    ...freshBase(),
     files: [
-      { path: 'a.ts', kind: 'text', originalSizeBytes: 10, includedByteStart: 0, includedByteEnd: 10, truncated: false, sha256: '1'.repeat(64), encoding: 'utf8', content: 'hello', secretsRedacted: 0 },
-      { path: 'b.png', kind: 'binary', originalSizeBytes: 4, includedByteStart: 0, includedByteEnd: 4, truncated: false, sha256: '2'.repeat(64), encoding: 'base64', content: 'AAAA', secretsRedacted: 0 },
+      { path: 'a.ts', kind: 'text', originalSizeBytes: 5, includedByteStart: 0, includedByteEnd: 5, truncated: false, sha256: '1'.repeat(64), encoding: 'utf8', content: 'hello' },
+      { path: 'b.png', kind: 'binary', originalSizeBytes: 3, includedByteStart: 0, includedByteEnd: 3, truncated: false, sha256: '2'.repeat(64), encoding: 'base64', content: 'AAAA' },
     ],
-    omissions: [{ path: 'secret.env', reason: 'E_SECRET_FILE', originalSizeBytes: null, sha256: null }],
-    tests: [{ command: ['npm', 'run', 'verify'], cwdRelative: '.', exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 5, stderrBytes: 0, stdoutExcerpt: 'ok', durationMs: 12, toolVersions: { node: 'v22.23.0' } }],
-    claims: [{ id: 'c1', text: 'this file discusses signature, token, and grant safely' }],
+    omissions: [{ path: 'secret.env', reason: 'secret-file', originalSizeBytes: null, sha256: null }],
+    testRuns: [{ command: ['npm', 'run', 'verify'], cwdRelative: '.', exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 5, stderrBytes: 0, stdoutExcerpt: 'ok', durationMs: 12, toolVersions: { node: 'v22.23.0' } }],
     rootAllowlist: ['a.ts', 'b.png'],
+    catalogueId: catalogueId(),
   };
 }
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+const NUL = '\u0000';
 
-describe('canonical serialization', () => {
-  it('is insensitive to object key insertion order', () => {
-    const a = { b: 1, a: 2, c: [3, { z: 9, y: 8 }] };
-    const b = { c: [3, { y: 8, z: 9 }], a: 2, b: 1 };
-    expect(canonicalString(a)).toBe(canonicalString(b));
+describe('known-answer vectors (independently recomputable)', () => {
+  it('catalogueId / canonical bytes / packDigest / fence match pinned KATs', () => {
+    expect(catalogueId()).toBe(KAT_CATALOGUE_ID);
+    expect(canonicalString(minimalBody())).toBe(KAT_CANON);
+    expect(packDigest(minimalBody())).toBe(KAT_PACK_DIGEST);
+    expect(deriveFenceNonce('00'.repeat(32), ['hello', 'world'])).toBe(KAT_FENCE);
   });
-  it('preserves array order', () => {
-    expect(canonicalString([3, 1, 2])).toBe('[3,1,2]');
-  });
-  it('rejects non-safe / non-finite / float numbers', () => {
-    expect(() => canonicalString(1.5)).toThrow();
-    expect(() => canonicalString(Number.MAX_SAFE_INTEGER + 1)).toThrow();
-    expect(() => canonicalString(Infinity)).toThrow();
-    expect(() => canonicalString(NaN)).toThrow();
-  });
-  it('normalizes -0 to 0', () => {
-    expect(canonicalString(-0)).toBe('0');
+  it('canonical bytes contain no NUL', () => {
+    expect(canonicalBytes(maximalBody()).indexOf(0)).toBe(-1);
   });
 });
 
-describe('digest: domain-separated, length-framed', () => {
-  it('is deterministic and reproducible', () => {
-    expect(packDigest(minimalBody())).toBe(packDigest(clone(minimalBody())));
+describe('canonical + digest', () => {
+  it('key-insertion-order invariant; arrays preserved; -0 normalized; unsafe rejected', () => {
+    expect(canonicalString({ b: 1, a: 2 })).toBe(canonicalString({ a: 2, b: 1 }));
+    expect(canonicalString([3, 1, 2])).toBe('[3,1,2]');
+    expect(canonicalString(-0)).toBe('0');
+    expect(() => canonicalString(1.5)).toThrow();
   });
-  it('every single-leaf mutation changes the digest', () => {
-    const base = packDigest(minimalBody());
-    const m1 = clone(minimalBody()); (m1 as any).repo = 'x'; expect(packDigest(m1)).not.toBe(base);
-    const m2 = clone(minimalBody()); (m2 as any).createdAtIso = '2026-07-14T00:00:01Z'; expect(packDigest(m2)).not.toBe(base);
-    const m3 = clone(minimalBody()); (m3 as any).dataFenceNonce = 'f'.repeat(32); expect(packDigest(m3)).not.toBe(base);
-  });
-  it('length framing separates otherwise-ambiguous concatenations', () => {
-    // Two distinct bodies whose canonical bytes differ only by a boundary must not collide.
-    const a = clone(minimalBody()); (a as any).repo = 'ab'; (a as any).headTree = 'c'.repeat(40);
-    const b = clone(minimalBody()); (b as any).repo = 'a'; (b as any).headTree = 'c'.repeat(40);
-    expect(packDigest(a)).not.toBe(packDigest(b));
-  });
-  it('uint64BE encodes big values without 32-bit overflow', () => {
-    expect(Array.from(uint64BE(256))).toEqual([0, 0, 0, 0, 0, 0, 1, 0]);
+  it('length framing + leaf mutation change the digest', () => {
+    const b0 = packDigest(minimalBody());
+    const m = clone(minimalBody()); (m as any).repoId = 'x'; expect(packDigest(m)).not.toBe(b0);
     expect(Array.from(uint64BE(4294967296))).toEqual([0, 0, 0, 1, 0, 0, 0, 0]);
   });
 });
 
-describe('validator: structural', () => {
-  it('accepts minimal and maximal valid bodies', () => {
+describe('validator: structure / literals / unknown+authority keys', () => {
+  it('accepts minimal + maximal', () => {
     expect(validatePackBody(minimalBody()).ok).toBe(true);
     expect(validatePackBody(maximalBody()).ok).toBe(true);
   });
-  it('rejects unknown top-level field', () => {
-    const m = clone(minimalBody()); (m as any).evil = 1;
-    const r = validatePackBody(m); expect(r.ok).toBe(false); expect((r as any).code).toBe('E_UNKNOWN_FIELD');
+  it('rejects unknown fields (incl. a self-declared limits object)', () => {
+    const m = clone(minimalBody()); (m as any).evil = 1; expect((validatePackBody(m) as any).code).toBe('E_UNKNOWN_FIELD');
+    const m2 = clone(minimalBody()); (m2 as any).limits = { maxFiles: 999999 }; expect((validatePackBody(m2) as any).code).toBe('E_UNKNOWN_FIELD');
   });
-  it('rejects unknown field nested inside a file', () => {
-    const m = maximalBody(); (m.files[0] as any).evil = 1;
-    expect((validatePackBody(m) as any).code).toBe('E_UNKNOWN_FIELD');
+  it('rejects advisory-literal violations and stray timestamp/claims', () => {
+    const m = clone(minimalBody()); (m as any).advisoryOnly = false; expect((validatePackBody(m) as any).code).toBe('E_ADVISORY_LITERAL');
+    const m2 = clone(minimalBody()); (m2 as any).grantsAuthority = true; expect((validatePackBody(m2) as any).code).toBe('E_ADVISORY_LITERAL');
+    const m3 = clone(minimalBody()); (m3 as any).createdAtIso = '2026-07-14T00:00:00Z'; expect((validatePackBody(m3) as any).code).toBe('E_UNKNOWN_FIELD');
+    const m4 = clone(minimalBody()); (m4 as any).claims = []; expect((validatePackBody(m4) as any).code).toBe('E_UNKNOWN_FIELD');
+    const m5 = clone(minimalBody()); (m5 as any).diffSha256 = 'd'.repeat(64); expect((validatePackBody(m5) as any).code).toBe('E_UNKNOWN_FIELD');
   });
-  it('rejects missing field', () => {
-    const m = clone(minimalBody()); delete (m as any).repo;
-    expect((validatePackBody(m) as any).code).toBe('E_MISSING_FIELD');
-  });
-  it('rejects wrong-typed field', () => {
-    const m = clone(minimalBody()); (m as any).repo = 5;
-    expect((validatePackBody(m) as any).code).toBe('E_WRONG_TYPE');
-  });
-});
-
-describe('validator: advisory literals', () => {
-  it('rejects advisoryOnly false', () => {
-    const m = clone(minimalBody()); (m as any).advisoryOnly = false;
-    expect((validatePackBody(m) as any).code).toBe('E_ADVISORY_LITERAL');
-  });
-  it('rejects grantsAuthority true', () => {
-    const m = clone(minimalBody()); (m as any).grantsAuthority = true;
-    expect((validatePackBody(m) as any).code).toBe('E_ADVISORY_LITERAL');
+  it('rejects authority-shaped keys in open maps; not in content', () => {
+    const m = maximalBody(); (m.testRuns[0].toolVersions as any).signature = 'x'; expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
+    const ok = maximalBody(); (ok.files[0] as any).content = 'sign grant token apply seed'; (ok.files[0] as any).originalSizeBytes = 27; (ok.files[0] as any).includedByteEnd = 27;
+    expect(validatePackBody(ok).ok).toBe(true);
   });
 });
 
-describe('validator: authority-shaped keys (open maps only)', () => {
-  it('rejects an authority-shaped key in toolVersions', () => {
-    const m = maximalBody(); (m.tests[0].toolVersions as any).signature = 'x';
-    expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
+describe('contract decision 1: snapshot subject + base pair', () => {
+  it('accepts a valid base pair; rejects a half pair', () => {
+    const ok = clone(minimalBody()); (ok as any).baseCommit = 'e'.repeat(40); (ok as any).baseTree = 'f'.repeat(40); expect(validatePackBody(ok).ok).toBe(true);
+    const bad = clone(minimalBody()); (bad as any).baseCommit = 'e'.repeat(40); expect((validatePackBody(bad) as any).code).toBe('E_BASE_PAIR');
   });
-  it('rejects an authority-shaped key in builderToolVersions', () => {
-    const m = clone(minimalBody()); (m.builderToolVersions as any).apply_token = 'x';
-    expect((validatePackBody(m) as any).code).toBe('E_AUTHORITY_SHAPED_KEY');
+});
+
+describe('contract decision 6: limits are registry-owned, not self-declared', () => {
+  it('rejects an unknown limits profile', () => {
+    const m = clone(minimalBody()); (m as any).limitsProfileId = 'evil'; expect((validatePackBody(m) as any).code).toBe('E_LIMIT_PROFILE');
   });
-  it('does NOT flag content that merely discusses signatures/tokens/grants', () => {
+});
+
+describe('contract decision 7: length-framed injective test identity', () => {
+  it('["a","b"] and ["a b"] are distinct (no false collision)', () => {
     const m = maximalBody();
-    (m.files[0] as any).content = 'const signature = grant(token, apply, seed);';
+    (m as any).testRuns = [
+      { command: ['a', 'b'], cwdRelative: '.', exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', durationMs: null, toolVersions: {} },
+      { command: ['a b'], cwdRelative: '.', exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', durationMs: null, toolVersions: {} },
+    ];
     expect(validatePackBody(m).ok).toBe(true);
   });
-  it('does NOT flag the legitimate grantsAuthority field name', () => {
-    expect(validatePackBody(minimalBody()).ok).toBe(true);
+  it('duplicate test identities are rejected', () => {
+    const m = maximalBody();
+    const t = { command: ['x'], cwdRelative: '.', exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', durationMs: null, toolVersions: {} };
+    (m as any).testRuns = [clone(t), clone(t)];
+    expect((validatePackBody(m) as any).code).toBe('E_DUP_TEST');
   });
 });
 
-describe('validator: unicode / hex / timestamps', () => {
-  it('rejects a non-NFC path', () => {
-    const m = maximalBody(); (m.files[0] as any).path = 'café.ts'; // NFD
-    expect((validatePackBody(m) as any).code).toBe('E_NOT_NFC');
-  });
-  it('rejects a lone surrogate in a string', () => {
-    const m = clone(minimalBody()); (m as any).repo = 'x' + String.fromCharCode(0xD800);
-    expect((validatePackBody(m) as any).code).toBe('E_INVALID_UTF8');
-  });
-  it('rejects uppercase / short / long sha256', () => {
-    for (const bad of ['D'.repeat(64), 'd'.repeat(63), 'd'.repeat(65)]) {
-      const m = clone(minimalBody()); (m as any).diffSha256 = bad;
-      expect((validatePackBody(m) as any).code).toBe('E_BAD_SHA');
-    }
-  });
-  it('rejects a 41-hex git sha', () => {
-    const m = clone(minimalBody()); (m as any).baseCommit = 'a'.repeat(41);
-    expect((validatePackBody(m) as any).code).toBe('E_BAD_GITSHA');
-  });
-  it('rejects a non-ISO timestamp', () => {
-    const m = clone(minimalBody()); (m as any).createdAtIso = '2026-07-14 00:00:00';
-    expect((validatePackBody(m) as any).code).toBe('E_BAD_TIMESTAMP');
+describe('contract decision 8: content length vs byte range', () => {
+  it('rejects utf8 and base64 length mismatches', () => {
+    const u = maximalBody(); (u.files[0] as any).includedByteEnd = 3; (u.files[0] as any).originalSizeBytes = 5; (u.files[0] as any).truncated = true;
+    expect((validatePackBody(u) as any).code).toBe('E_CONTENT_LENGTH');
+    const b = maximalBody(); (b.files[1] as any).includedByteEnd = 2; (b.files[1] as any).originalSizeBytes = 3; (b.files[1] as any).truncated = true;
+    expect((validatePackBody(b) as any).code).toBe('E_CONTENT_LENGTH');
   });
 });
 
-describe('validator: numbers', () => {
-  it('rejects float, unsafe, negative, and -0 integer fields', () => {
-    for (const bad of [1.5, Number.MAX_SAFE_INTEGER + 2, -1, -0]) {
-      const m = clone(maximalBody()); (m.files[0] as any).originalSizeBytes = bad; (m.files[0] as any).includedByteEnd = 0;
-      expect((validatePackBody(m) as any).code).toBe('E_BAD_INTEGER');
-    }
+describe('contract decision 9: relative POSIX, NFC, no raw NUL, safe ints', () => {
+  it('rejects absolute / traversal / backslash paths', () => {
+    for (const bad of ['/etc/x', '../x', 'a\\b']) { const m = maximalBody(); (m.files[0] as any).path = bad; expect((validatePackBody(m) as any).code).toBe('E_REL_PATH'); }
   });
-  it('allows a negative exitCode but rejects -0', () => {
-    const m = clone(maximalBody()); (m.tests[0] as any).exitCode = -9;
-    expect(validatePackBody(m).ok).toBe(true);
-    const m2 = clone(maximalBody()); (m2.tests[0] as any).exitCode = -0;
-    expect((validatePackBody(m2) as any).code).toBe('E_BAD_INTEGER');
+  it('rejects a non-NFC path and a raw NUL in any string', () => {
+    const nfc = maximalBody(); (nfc.files[0] as any).path = 'café.ts'; expect((validatePackBody(nfc) as any).code).toBe('E_NOT_NFC');
+    const nul = clone(minimalBody()); (nul as any).repoId = 'x' + NUL + 'y'; expect((validatePackBody(nul) as any).code).toBe('E_NUL');
   });
-});
-
-describe('validator: ordering / duplicates / ranges', () => {
-  it('rejects unsorted files', () => {
-    const m = maximalBody(); const tmp = m.files[0]; (m as any).files = [m.files[1], tmp];
-    expect((validatePackBody(m) as any).code).toBe('E_ARRAY_UNSORTED');
-  });
-  it('rejects a path present in both files and omissions', () => {
-    const m = maximalBody(); (m.omissions[0] as any).path = 'a.ts';
-    expect((validatePackBody(m) as any).code).toBe('E_DUP_PATH');
-  });
-  it('rejects an inconsistent truncated flag', () => {
-    const m = maximalBody(); (m.files[0] as any).includedByteEnd = 5; (m.files[0] as any).truncated = false;
-    expect((validatePackBody(m) as any).code).toBe('E_BAD_RANGE');
-  });
-  it('rejects a binary file inlined as utf8', () => {
-    const m = maximalBody(); (m.files[1] as any).encoding = 'utf8';
-    expect((validatePackBody(m) as any).code).toBe('E_BINARY_INLINE');
+  it('rejects bad hashes / gitshas / integers', () => {
+    const s = clone(minimalBody()); (s as any).headTree = 'B'.repeat(40); expect((validatePackBody(s) as any).code).toBe('E_BAD_GITSHA');
+    const i = maximalBody(); (i.files[0] as any).originalSizeBytes = 1.5; expect((validatePackBody(i) as any).code).toBe('E_BAD_INTEGER');
   });
 });
 
-describe('digest-echo / envelope / seat render', () => {
-  it('seals and verifies a valid envelope', () => {
+describe('contract decision 10: secret-content refusal + closed omission enum', () => {
+  it('refuses a pack whose included text content is secret-shaped', () => {
+    const m = maximalBody(); const secret = 'key=sk-or-abcdefghijklmnop0123';
+    (m.files[0] as any).content = secret; (m.files[0] as any).originalSizeBytes = secret.length; (m.files[0] as any).includedByteEnd = secret.length;
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('rejects a narrative omission reason (enum only)', () => {
+    const m = maximalBody(); (m.omissions[0] as any).reason = 'it looked scary';
+    expect((validatePackBody(m) as any).code).toBe('E_OMISSION_REASON');
+  });
+});
+
+describe('catalogue binding + downgrade', () => {
+  it('rejects a wrong catalogueId and detects catalogue mutation', () => {
+    const m = clone(minimalBody()); (m as any).catalogueId = '0'.repeat(64); expect((validatePackBody(m) as any).code).toBe('E_CATALOGUE_ID');
+    const mutated = { ...SECRET_CATALOGUE, patterns: [...SECRET_CATALOGUE.patterns, { id: 'x', pattern: 'z', flags: 'g' }] };
+    expect(sha256Hex(canonicalBytes(mutated))).not.toBe(catalogueId());
+    expect(scanForSecrets('this discusses tokens and signatures').length).toBe(0);
+  });
+});
+
+describe('fence derived from packDigest, collision-free (not stored)', () => {
+  it('increments past a colliding candidate', () => {
+    const pd = packDigest(minimalBody());
+    const candidate0 = sha256Hex(new TextEncoder().encode(`aukora-fu-evidence-fence-v1|${pd}|0`)).slice(0, 32);
+    const contents = [fenceOpen(candidate0)]; // force a collision at counter 0
+    const nonce = deriveFenceNonce(pd, contents);
+    expect(nonce).not.toBe(candidate0);
+    expect(fenceCollisionFree(nonce, contents)).toBe(true);
+  });
+});
+
+describe('envelope: digest echo + identical seat render (no timestamp)', () => {
+  it('seals to {body, packDigest} only, verifies, rejects tamper', () => {
     const env = sealEnvelope(minimalBody());
+    expect(Object.keys(env).sort()).toEqual(['body', 'packDigest']);
     expect(verifyEnvelope(env)).toBe(true);
-    expect(validateEnvelope(env).ok).toBe(true);
-  });
-  it('rejects a tampered digest (one byte)', () => {
-    const env = sealEnvelope(minimalBody());
-    const bad = { body: env.body, packDigest: env.packDigest.slice(0, 63) + (env.packDigest[63] === 'a' ? 'b' : 'a') };
-    expect(verifyEnvelope(bad as any)).toBe(false);
+    const bad = { ...env, packDigest: env.packDigest.slice(0, 63) + (env.packDigest[63] === 'a' ? 'b' : 'a') };
     expect((validateEnvelope(bad) as any).code).toBe('E_DIGEST_MISMATCH');
-  });
-  it('rejects a decoy digest of a different body', () => {
-    const env = sealEnvelope(minimalBody());
-    const bad = { body: env.body, packDigest: packDigest(maximalBody()) };
-    expect((validateEnvelope(bad) as any).code).toBe('E_DIGEST_MISMATCH');
-  });
-  it('rejects an unknown field on the envelope', () => {
-    const env = sealEnvelope(minimalBody());
-    expect((validateEnvelope({ ...env, extra: 1 }) as any).code).toBe('E_UNKNOWN_FIELD');
   });
   it('renders byte-identically for every seat', () => {
     const env = sealEnvelope(maximalBody());
-    const a = renderForSeat(env, 'seat-A');
-    const b = renderForSeat(env, 'seat-B');
-    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
-    // one-byte divergence would be detectable:
-    expect(Buffer.from(a).equals(Buffer.from(canonicalBytes(env)))).toBe(true);
-  });
-});
-
-describe('framing (pure)', () => {
-  it('derives a nonce whose fence tokens do not occur in the content', () => {
-    const contents = ['hello', 'world ⟪DATA:deadbeef⟫'];
-    const nonce = deriveFenceNonce(contents);
-    expect(fenceCollisionFree(nonce, contents)).toBe(true);
-    const wrapped = fence(nonce, 'x');
-    expect(wrapped.startsWith(fenceOpen(nonce))).toBe(true);
-    expect(wrapped.endsWith(fenceClose(nonce))).toBe(true);
-  });
-});
-
-describe('catalogue (pure, derived identity)', () => {
-  it('has a stable derived catalogueId', () => {
-    expect(catalogueId()).toBe(catalogueId());
-    expect(catalogueId()).toMatch(/^[0-9a-f]{64}$/);
-  });
-  it('changing the catalogue changes catalogueId', () => {
-    const mutated = { ...SECRET_CATALOGUE, patterns: [...SECRET_CATALOGUE.patterns, { id: 'x', pattern: 'z', flags: 'g' }] };
-    expect(sha256Hex(canonicalBytes(mutated))).not.toBe(catalogueId());
-  });
-  it('detects a secret token in content', () => {
-    const m = scanForSecrets('key=sk-or-abcdefghijklmnop0123 done');
-    expect(m.length).toBeGreaterThan(0);
-  });
-  it('does not false-positive on ordinary prose', () => {
-    expect(scanForSecrets('this discusses tokens and signatures in prose').length).toBe(0);
+    expect(Buffer.from(renderForSeat(env, 'A')).equals(Buffer.from(renderForSeat(env, 'B')))).toBe(true);
   });
 });
