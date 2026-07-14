@@ -16,7 +16,7 @@ const KAT_CATALOGUE_ID = '04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13
 const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13dda82a94cb","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
 const KAT_MIN_DIGEST = '508d43495fcd40dfde386893069848251b82974a395f329bbe8e8696d764a878';
 const KAT_MAX_DIGEST = '6e8f436fa6266400d7816970e904251673c8ad9f0d1e0b8eb8d9c5e2ad99f2aa';
-const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122';
+const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28';
 const SHA_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const SHA_ZEROS3 = '709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c';
 
@@ -144,6 +144,28 @@ describe('decisions 12-13: projection secret refusal', () => {
     const m = maximalBody(); (m.testRuns[0] as any).stdoutExcerpt = 'sk-or-abcdefghijklmnop0123';
     expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
     expect(scanForSecrets('discusses tokens and signatures').length).toBe(0);
+  });
+});
+
+function mkBinFile(path: string, bytes: number[]): EvidenceFileV1 {
+  const u8 = new Uint8Array(bytes); const b64 = Buffer.from(u8).toString('base64'); const h = sha256Hex(u8);
+  return { path, kind: 'binary', originalSizeBytes: bytes.length, includedByteStart: 0, includedByteEnd: bytes.length, truncated: false, fullSha256: h, includedSha256: h, encoding: 'base64', content: b64 };
+}
+
+describe('D1: full-width fence + exact base64 secret scanning', () => {
+  it('fence nonce is the full 64-hex SHA-256', () => {
+    expect(deriveFenceNonce('0'.repeat(64), ['x']).length).toBe(64);
+    expect(deriveFenceNonce('00'.repeat(32), ['hello', 'world'])).toBe(KAT_FENCE);
+  });
+  it('refuses an ASCII secret inside invalid UTF-8 binary (ASCII-byte projection)', () => {
+    const bytes = [...enc.encode('sk-or-abcdefghijklmnop0123')].concat([0xFF, 0xFE]);
+    const m = bodyWith([mkBinFile('x.bin', bytes)], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('refuses a confusable secret inside valid UTF-8 base64 (strict decode + skeleton)', () => {
+    const bytes = [...enc.encode('sk-оr-abcdefghijklmnop0123')]; // Cyrillic о U+043E
+    const m = bodyWith([mkBinFile('y.bin', bytes)], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
   });
 });
 

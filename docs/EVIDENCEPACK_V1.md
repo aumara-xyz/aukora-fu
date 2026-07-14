@@ -84,7 +84,7 @@ and secret-free included content — nothing more.
 Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
 `scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
 bytes, its `packDigest` (`508d4349…`), the `catalogueId` (`04b0ae21…`, catalogue v2), a maximal-body
-`packDigest` (`6e8f4360…`), and a fence nonce (`3a23cb4c…` for `deriveFenceNonce("00"×32,
+`packDigest` (`6e8f4360…`), and a fence nonce (`3a23cb4c…a706ccf9…` (full 64-hex) for `deriveFenceNonce("00"×32,
 ["hello","world"])`).
 
 ## Round-12 (Commit D) amendments
@@ -104,6 +104,14 @@ Building on the settled contract, Commit D adds:
 - **Canonicalizer rejects `-0`** outright (decision 14). **Strict canonical-wire verification**
   (`verifyCanonicalWire`) rejects BOM, leading/trailing/alternate whitespace, duplicate keys, alternate
   numeric/escape encodings, and malformed Unicode (decision 15).
+
+## Round-13 (D1) amendments
+- **Full-width fence:** `deriveFenceNonce` uses the entire 64-hex SHA-256 (no truncation).
+- **Exact base64 secret scan:** for `base64` file content, always scan a deterministic ASCII-byte
+  projection (printable ASCII + TAB/LF/CR retained; every other byte → LF), which catches an ASCII
+  secret hidden inside invalid-UTF-8 binary; additionally strict-decode UTF-8
+  (`TextDecoder("utf-8",{fatal:true})`) and, on success, run the raw/NFC/zero-width/confusable
+  projections, which catches a confusable secret inside valid-UTF-8 base64.
 
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,

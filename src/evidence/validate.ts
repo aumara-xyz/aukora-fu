@@ -48,6 +48,28 @@ function decodeBase64Canonical(s: string): Uint8Array | null {
   return new Uint8Array(buf);
 }
 
+/** Deterministic ASCII-byte projection (D1): keep printable ASCII + TAB/LF/CR; every other byte -> LF. */
+function asciiByteProjection(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    s += ((b >= 0x20 && b <= 0x7E) || b === 0x09 || b === 0x0A || b === 0x0D) ? String.fromCharCode(b) : '\n';
+  }
+  return s;
+}
+
+/** D1 base64 secret scan: always scan the ASCII-byte projection (catches ASCII secrets inside invalid
+ *  UTF-8 binary); additionally strict-decode UTF-8 and, on success, run raw/NFC/zero-width/confusable
+ *  projections (catches confusable secrets inside valid UTF-8). */
+function decodedBytesHaveSecret(bytes: Uint8Array): boolean {
+  if (textHasSecret(asciiByteProjection(bytes))) return true;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (textHasSecret(text)) return true;
+  } catch { /* invalid UTF-8: the ASCII projection already covered it */ }
+  return false;
+}
+
 function checkString(v: unknown, p: string): ValidationResult {
   if (typeof v !== 'string') return err('E_WRONG_TYPE', p, 'expected string');
   if (v.indexOf('\u0000') !== -1) return err('E_NUL', p, 'raw NUL in string');
@@ -119,21 +141,21 @@ function checkFile(v: unknown, p: string): ValidationResult {
 
   const content = o.content as string;
   let bytes: Uint8Array;
-  let scanText: string;
+  let secret: boolean;
   if (o.encoding === 'utf8') {
     bytes = encoder.encode(content);
-    scanText = content;
+    secret = textHasSecret(content);
   } else {
     const decoded = decodeBase64Canonical(content);
     if (decoded === null) return err('E_BASE64_NONCANONICAL', `${p}.content`, 'non-canonical base64');
     bytes = decoded;
-    scanText = Buffer.from(decoded).toString('utf8');
+    secret = decodedBytesHaveSecret(bytes);
   }
   const included = end - start;
   if (bytes.length !== included) return err('E_CONTENT_LENGTH', `${p}.content`, 'decoded length != included range');
   if (sha256Hex(bytes) !== o.includedSha256) return err('E_HASH_INCLUDED', `${p}.includedSha256`, 'included hash mismatch');
   if (start === 0 && end === orig && o.includedSha256 !== o.fullSha256) return err('E_HASH_COMPLETE', `${p}`, 'complete file: includedSha256 must equal fullSha256');
-  if (textHasSecret(scanText)) return err('E_SECRET_CONTENT', `${p}.content`, 'secret-shaped included content');
+  if (secret) return err('E_SECRET_CONTENT', `${p}.content`, 'secret-shaped included content');
   return OK;
 }
 

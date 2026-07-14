@@ -25,10 +25,11 @@ export function fenceCollisionFree(nonce: string, contents: readonly string[]): 
 }
 
 /** Derive a presentation-time fence nonce from (domain, packDigest, counter), incrementing until
- *  collision-free. Deterministic given (packDigest, contents). Never stored in the body. */
+ *  collision-free. The FULL 64-hex SHA-256 is the nonce (D1: no truncation). Deterministic given
+ *  (packDigest, contents). Never stored in the body. */
 export function deriveFenceNonce(packDigest: string, contents: readonly string[]): string {
   for (let counter = 0; counter < 100000; counter++) {
-    const nonce = sha256Hex(encoder.encode(`${FENCE_DOMAIN}|${packDigest}|${counter}`)).slice(0, 32);
+    const nonce = sha256Hex(encoder.encode(`${FENCE_DOMAIN}|${packDigest}|${counter}`)); // full 64-hex
     if (fenceCollisionFree(nonce, contents)) return nonce;
   }
   throw new Error('E_FENCE_NONCE'); // unreachable in practice

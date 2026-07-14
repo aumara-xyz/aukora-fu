@@ -18,7 +18,7 @@ def pack_digest(body) -> str:
 
 def fence_nonce(pack_digest_hex: str, contents) -> str:
     for counter in range(100000):
-        nonce = hashlib.sha256(f'{FENCE_DOMAIN}|{pack_digest_hex}|{counter}'.encode('utf-8')).hexdigest()[:32]
+        nonce = hashlib.sha256(f'{FENCE_DOMAIN}|{pack_digest_hex}|{counter}'.encode('utf-8')).hexdigest()
         toks = [f'<<AUKORA-DATA:{nonce}>>', f'<<AUKORA-END:{nonce}>>']
         if all(all(t not in c for t in toks) for c in contents):
             return nonce
