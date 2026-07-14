@@ -7,9 +7,9 @@ canonical EvidencePack, transport, observer, and CLI layers are built in reviewe
 
 ## What it is (and is not)
 - ✅ Hardened advisory council core with offline tests: `npm run verify`.
-- ⚠️ Legacy local shard runner: `bun run council` (prints a legacy warning).
-- ✅ Browser observer: `bun run start` then open `http://127.0.0.1:9900`.
-- ✅ Demo/sample mode with no API key: `bun run sample`.
+- ⚠️ Legacy local shard runner: `bun run legacy:council` (disabled unless explicitly opted in).
+- ✅ Legacy browser observer: `bun run legacy:observer` then open `http://127.0.0.1:9900`.
+- ✅ Legacy demo/sample mode with no API key: `bun run legacy:sample`.
 - ✅ Loopback-only UI (`127.0.0.1:9900`). No microphone, no camera.
 - ✅ **Read-only server**: writes nothing, deletes nothing, runs no tool; guards path traversal to `runs/`.
 - ❌ NOT a kernel organ. It does **not** live in `core/src` and imports **nothing** from the kernel.
@@ -37,11 +37,11 @@ Fu release exists, Symbiote will consume that pinned release instead of maintain
 2. Install and verify the hardened offline core:
 
        bun install --frozen-lockfile
-       npm run verify
+       bun run core:verify
 
 3. Start the legacy browser observer:
 
-       bun run start
+       bun run legacy:observer
 
 4. Open:
 
@@ -49,23 +49,24 @@ Fu release exists, Symbiote will consume that pinned release instead of maintain
 
 5. In a second terminal, prove the legacy runner writes a sample run:
 
-       bun run sample
+       bun run legacy:sample
 
-6. The legacy paid runner is retained for compatibility, but must not be treated as the canonical
-   hardened review path. No new paid run should be made until observer accounting and EvidencePackV1 land.
-
-       cp .env.example .env
-       # edit .env and set OPENROUTER_API_KEY
-       bun run legacy:council
+6. The legacy paid runner is retained for compatibility, but there are deliberately no primary
+   `start`, `sample`, or `council` aliases. It requires both an explicit target and an explicit unsafe
+   opt-in, and refuses targets containing secret-shaped filenames or symlinks. Do not use it until
+   observer accounting and EvidencePackV1 land.
 
 The page refreshes when a new run lands. Generated `runs/*.json` are local output and are gitignored.
 
 ## Review Another Folder
 
 The following command belongs to the legacy raw-folder runner. It is not the future EvidencePackV1
-interface and must not be used on a directory containing secrets or private material:
+interface. It remains disabled by default and must not be used on secrets or private material:
 
-    FUSION_TARGET=/absolute/path/to/project COUNCIL_BUDGET=10 bun run council
+    AUKORA_ALLOW_LEGACY_PAID_RUN=1 \
+    FUSION_TARGET=/absolute/path/to/project \
+    COUNCIL_BUDGET=10 \
+    bun run legacy:council
 
 Useful knobs:
 

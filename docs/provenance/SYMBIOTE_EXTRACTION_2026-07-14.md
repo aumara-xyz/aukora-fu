@@ -23,8 +23,16 @@ licensing, authority semantics, or release status.
 | `core/tests/aukoraFuEngine.test.ts` | `2742e56d7a3092e7db12ffc1ca5c4b4d965422a1` | `5174b7180f50dfb3c61b916867aeb63887dd8a4baa1cd721c8cb5065d48a0978` |
 | `core/tests/aukoraFuSpendLedger.test.ts` | `99bff7fd48b720b2bdf341463dfbd4d862e94417` | `08badddc16621d3531eb586ecff94a11b2333d8a7edaad6570e3453c531e1d4b` |
 
-The real captured reply fixtures under `core/tests/fixtures/fusion-replies/` were also extracted as
-test evidence. They contain model output only and no credentials or authority material.
+The captured reply fixtures were also extracted as test evidence. They contain model output only and
+no credentials or authority material.
+
+| Donor fixture path | Git blob | SHA-256 of donor bytes |
+|---|---|---|
+| `core/tests/fixtures/fusion-replies/deepseek-v4-pro-dist-reordered.txt` | `eb33d0940618f88147d79bfd613794c9fe760b65` | `5c5069504a56d3649d3d7799eaf52c6a41d3337a4c6ee357cf0d43462d1d2c8e` |
+| `core/tests/fixtures/fusion-replies/glm-5.2-compliant.txt` | `1723ddbdd2cb096cab377ae8aad43d11bf7fd258` | `87e482ca22fcd6da3e415c8213aff4b25a70daa2325e37591a82a8613109f413` |
+| `core/tests/fixtures/fusion-replies/kimi-k2.7-code-empty.txt` | `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `core/tests/fixtures/fusion-replies/llama-4-maverick-prose-noncompliant.txt` | `1dba7a20a08d789fa126c41cd77448fa56358d76` | `8ed09fe6e798170d62e05135788fe9e79af355f179e029a8a5c6a56ad136c1be` |
+| `core/tests/fixtures/fusion-replies/qwen3.7-max-compliant.txt` | `bc5f252af288df02763b039990b7e81d11c57ac9` | `6440ff6356a6f9cd50fdc4b14b75ec62b5702ed3daa9a95552bda0591031fbad` |
 
 ## Deliberate boundary changes
 

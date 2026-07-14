@@ -6,6 +6,7 @@
 // and grants no authority. The browser only reads those artifacts.
 import * as fs from "fs";
 import * as path from "path";
+import { assertLegacyTargetSafe } from "./legacy/legacyTargetSafety";
 
 type Vote = "GREEN" | "YELLOW" | "RED" | "non_vote";
 type Reason =
@@ -91,7 +92,8 @@ function collectFiles(root: string): Array<{ rel: string; body: string }> {
     for (const name of fs.readdirSync(dir)) {
       if (SKIP_DIRS.has(name) || SKIP_FILES.has(name)) continue;
       const p = path.join(dir, name);
-      const st = fs.statSync(p);
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) throw new Error(`legacy_target_symlink_refused:${safeRel(root, p)}`);
       if (st.isDirectory()) { walk(p); continue; }
       if (!TEXT_EXT.has(path.extname(name).toLowerCase())) continue;
       if (st.size > 180_000) continue;
@@ -415,12 +417,8 @@ function scrubSecrets(s: string): string {
     .replace(/-----BEGIN\s+PRIVATE\s+KEY-----[\s\S]*?-----END\s+PRIVATE\s+KEY-----/g, "[REDACTED_PRIVATE_KEY]");
 }
 
-function htmlEscape(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 function cleanText(s: unknown, cap = 520): string {
-  return htmlEscape(scrubSecrets(String(s ?? ""))).slice(0, cap);
+  return scrubSecrets(String(s ?? "")).slice(0, cap);
 }
 
 function sampleResults(council: string[]): Review[] {
@@ -445,7 +443,7 @@ function sampleResults(council: string[]): Review[] {
 }
 
 async function main() {
-  console.warn('[fu][legacy] This is the preserved v0.1 shard runner, not the hardened canonical council in src/.');
+  console.warn('[fu][legacy] This is the preserved v0.1 shard runner, not the hardened canonical council in src/. Use `bun run core:verify` for the canonical offline core.');
   loadDotenv();
   const sample = process.argv.includes("--sample");
   const council = models();
@@ -454,6 +452,14 @@ async function main() {
   const concurrency = clampInt(process.env.COUNCIL_CONCURRENCY, 3, 1, 8);
   const apiKey = process.env.OPENROUTER_API_KEY || null;
   fs.mkdirSync(RUNS_DIR, { recursive: true });
+
+  if (!sample) {
+    if (process.env.AUKORA_ALLOW_LEGACY_PAID_RUN !== '1') {
+      throw new Error('legacy_paid_runner_disabled:Set AUKORA_ALLOW_LEGACY_PAID_RUN=1 only after reviewing the target');
+    }
+    if (!process.env.FUSION_TARGET) throw new Error('legacy_target_required:Set an explicit FUSION_TARGET');
+    assertLegacyTargetSafe(target);
+  }
 
   console.log(`[fu] target: ${target}`);
   console.log(`[fu] council: ${council.length} model(s), ${SHARDS.length} shard(s), budget=${sample ? "sample" : budget}, concurrency=${concurrency}`);
@@ -482,7 +488,7 @@ async function main() {
   fs.writeFileSync(path.join(RUNS_DIR, "latest.json"), JSON.stringify(artifact, null, 2));
   console.log(`[fu] wrote ${path.relative(ROOT, file)} and runs/latest.json`);
   console.log(`[fu] verdict: ${artifact.quorum.status} (${artifact.quorum.reason})`);
-  console.log("[fu] open http://127.0.0.1:9900 after starting: bun run start");
+  console.log("[fu] open http://127.0.0.1:9900 after starting: bun run legacy:observer");
 }
 
 main().catch(e => {

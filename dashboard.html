@@ -157,6 +157,7 @@
     function shortId(slug) { const s = String(slug).toLowerCase(); for (const k in KNOWN) if (s.includes(k)) return KNOWN[k]; const t = s.split('/').pop().replace(/[^a-z0-9]/g, ''); return (t.slice(0, 3) || '???').toUpperCase(); }
     function hexFor(v) { if (v === 'GREEN') return '#22f0a8'; if (v === 'YELLOW') return '#ffca3a'; if (v === 'RED') return '#ff5a5a'; return '#64748b'; }
     function voteLabel(v, nonVote) { return (nonVote || v === 'non_vote') ? 'NON-VOTE' : v; }
+    function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function bannerClass(s) { if (!s) return 'banner-muted'; if (s.startsWith('GREEN')) return 'banner-green'; if (s.startsWith('YELLOW')) return 'banner-yellow'; if (s.startsWith('RED')) return 'banner-red'; return 'banner-muted'; }
     async function fetchJSON(u) { try { const r = await fetch(u, { cache: 'no-store' }); if (!r.ok) return null; return await r.json(); } catch { return null; } }
 
@@ -181,7 +182,7 @@
         item.className = `thread-item ${t.runId === state.activeId ? 'thread-active' : ''}`;
         item.onclick = () => selectThread(t.runId);
         const when = (t.createdAt || '').replace('T', ' ').slice(0, 19);
-        item.innerHTML = `<div class="thread-meta"><span class="thread-title">${t.runId.replace('run-','').slice(0,19)}</span><span class="thread-sub">${(t.target||'').slice(0,34)} · ${when}</span></div><span class="thread-badge" style="color:${col};border:1px solid ${col}44;background:rgba(255,255,255,0.02);">${st.replace('_QUORUM','')}</span>`;
+        item.innerHTML = `<div class="thread-meta"><span class="thread-title">${escapeHtml(t.runId.replace('run-','').slice(0,19))}</span><span class="thread-sub">${escapeHtml((t.target||'').slice(0,34))} · ${escapeHtml(when)}</span></div><span class="thread-badge" style="color:${col};border:1px solid ${col}44;background:rgba(255,255,255,0.02);">${escapeHtml(st.replace('_QUORUM',''))}</span>`;
         threadListContainer.appendChild(item);
       });
     }
@@ -196,8 +197,8 @@
         row.onclick = () => openDetail(m.slug);
         const divTxt = (typeof m.meanDivergence === 'number' && m.meanDivergence >= 0) ? `div ${m.meanDivergence.toFixed(2)}` : '';
         row.innerHTML = `
-          <div class="model-meta-row"><span class="model-name">${m.name} ${m.isContrarian ? '<span style="color:var(--accent-gold);">★</span>' : ''}</span>
-          <span class="model-vote-tag" style="color:${col};border:1px solid ${col}44;background:rgba(255,255,255,0.02);">${voteLabel(m.vote, m.nonVote)}</span></div>
+          <div class="model-meta-row"><span class="model-name">${escapeHtml(m.name)} ${m.isContrarian ? '<span style="color:var(--accent-gold);">★</span>' : ''}</span>
+          <span class="model-vote-tag" style="color:${col};border:1px solid ${col}44;background:rgba(255,255,255,0.02);">${escapeHtml(voteLabel(m.vote, m.nonVote))}</span></div>
           <div class="model-distribution-bar"><div class="bar-segment" style="width:${m.dist.g*100}%;background:var(--accent-green)"></div><div class="bar-segment" style="width:${m.dist.y*100}%;background:var(--accent-gold)"></div><div class="bar-segment" style="width:${m.dist.r*100}%;background:var(--accent-red)"></div></div>
           <div class="model-meta-row" style="font-size:10px;color:var(--text-muted);font-family:monospace;"><span>G ${(m.dist.g*100).toFixed(0)}%</span><span>Y ${(m.dist.y*100).toFixed(0)}%</span><span>R ${(m.dist.r*100).toFixed(0)}%</span><span>${divTxt}</span></div>`;
         telemetryList.appendChild(row);
@@ -212,13 +213,13 @@
       const col = hexFor(m.vote);
       const js = (a.divergenceMatrix && a.divergenceMatrix.js) || [];
       const cell = (a.cells || []).filter(c => c.model === slug);
-      const findings = cell.filter(c => c.vote === 'YELLOW' || c.vote === 'RED').map(c => `<b style="color:${hexFor(c.vote)}">${c.vote}</b> · ${(c.shard.split(':')[1] || c.shard)}: ${c.findingSummary}`).join('<br><br>') || (cell[0]?.findingSummary || 'no findings');
+      const findings = cell.filter(c => c.vote === 'YELLOW' || c.vote === 'RED').map(c => `<b style="color:${hexFor(c.vote)}">${escapeHtml(c.vote)}</b> · ${escapeHtml(c.shard.split(':')[1] || c.shard)}: ${escapeHtml(c.findingSummary)}`).join('<br><br>') || escapeHtml(cell[0]?.findingSummary || 'no findings');
       let pairs = '';
       state.models.forEach((o, j) => { if (o.slug === slug) return; const v = js[mi] ? js[mi][j] : -1; const pv = (v == null || v < 0) ? null : v; const c = pv == null ? 'var(--text-muted)' : pv > 0.4 ? 'var(--accent-red)' : pv > 0.1 ? 'var(--accent-gold)' : 'var(--accent-green)'; pairs += `<div class="divbar"><span style="width:34px;color:var(--text-muted)">${o.id}</span><div class="track"><div class="fill" style="width:${pv == null ? 0 : Math.min(100, pv*100)}%;background:${c}"></div></div><span style="color:${c};width:34px;text-align:right">${pv == null ? 'N/A' : pv.toFixed(2)}</span></div>`; });
       nodeDetail.className = 'show';
       nodeDetail.innerHTML = `
-        <div class="nd-title"><span style="color:${col}">${m.name} ${m.isContrarian ? '★' : ''}</span><span class="nd-close" onclick="closeDetail()">✕</span></div>
-        <div class="nd-row"><span>verdict</span><span style="color:${col};font-weight:700">${voteLabel(m.vote, m.nonVote)}</span></div>
+        <div class="nd-title"><span style="color:${col}">${escapeHtml(m.name)} ${m.isContrarian ? '★' : ''}</span><span class="nd-close" onclick="closeDetail()">✕</span></div>
+        <div class="nd-row"><span>verdict</span><span style="color:${col};font-weight:700">${escapeHtml(voteLabel(m.vote, m.nonVote))}</span></div>
         <div class="nd-row"><span>confidence</span><span>${m.conf != null ? (m.conf*100).toFixed(0)+'%' : '—'}</span></div>
         <div class="nd-row"><span>mean divergence</span><span>${typeof m.meanDivergence==='number' && m.meanDivergence>=0 ? m.meanDivergence.toFixed(2) : 'N/A'}</span></div>
         <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-top:4px;">divergence vs others</div>
@@ -230,9 +231,9 @@
 
     function renderGovernance(a) {
       const lines = a.governanceLines || [];
-      const contra = a.contrarian ? `<div class="gov-line" style="color:var(--accent-gold);">contrarian: ${a.contrarian.model} (mean divergence ${a.contrarian.meanDivergence.toFixed(2)})</div>` : '';
-      const shards = (a.perShard || []).map(s => `<div class="gov-line">shard ${s.shard.split(':')[0] || s.shard}: consensus ${(s.consensusStrength*100).toFixed(0)}% · dominant ${s.dominant}</div>`).join('');
-      govLines.innerHTML = lines.map(l => `<div class="gov-line">${l}</div>`).join('') + contra + shards;
+      const contra = a.contrarian ? `<div class="gov-line" style="color:var(--accent-gold);">contrarian: ${escapeHtml(a.contrarian.model)} (mean divergence ${a.contrarian.meanDivergence.toFixed(2)})</div>` : '';
+      const shards = (a.perShard || []).map(s => `<div class="gov-line">shard ${escapeHtml(s.shard.split(':')[0] || s.shard)}: consensus ${(s.consensusStrength*100).toFixed(0)}% · dominant ${escapeHtml(s.dominant)}</div>`).join('');
+      govLines.innerHTML = lines.map(l => `<div class="gov-line">${escapeHtml(l)}</div>`).join('') + contra + shards;
     }
 
     function loadArtifact(a) { state.current = a; state.activeId = a.runId || 'demo'; state.models = toDisplayModels(a); state.selected = null; nodeDetail.className = ''; renderBanner(a); renderTelemetry(); renderGovernance(a); renderThreads(); }
