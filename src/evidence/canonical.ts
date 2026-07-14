@@ -15,25 +15,41 @@ function encodeNumber(n: number): string {
   return String(n);
 }
 
+/** D2: lone surrogates have no canonical UTF-8 encoding — reject them in keys and string values. */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF) { const n = s.charCodeAt(i + 1); if (!(n >= 0xDC00 && n <= 0xDFFF)) return true; i++; }
+    else if (c >= 0xDC00 && c <= 0xDFFF) return true;
+  }
+  return false;
+}
+function encodeString(s: string): string {
+  if (hasLoneSurrogate(s)) throw new Error('E_INVALID_UTF8');
+  return JSON.stringify(s);
+}
+
 export function canonicalString(value: unknown): string {
   if (value === null) return 'null';
   if (value === true) return 'true';
   if (value === false) return 'false';
   const t = typeof value;
   if (t === 'number') return encodeNumber(value as number);
-  if (t === 'string') return JSON.stringify(value as string);
+  if (t === 'string') return encodeString(value as string);
   if (Array.isArray(value)) {
     let out = '[';
     for (let i = 0; i < value.length; i++) { if (i > 0) out += ','; out += canonicalString(value[i]); }
     return out + ']';
   }
   if (t === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new Error('E_PROTO'); // reject class instances / polluted protos
     const obj = value as Record<string, unknown>;
     const keys = Object.keys(obj).sort();
     let out = '{';
     for (let i = 0; i < keys.length; i++) {
       if (i > 0) out += ',';
-      out += JSON.stringify(keys[i]) + ':' + canonicalString(obj[keys[i]]);
+      out += encodeString(keys[i]) + ':' + canonicalString(obj[keys[i]]);
     }
     return out + '}';
   }

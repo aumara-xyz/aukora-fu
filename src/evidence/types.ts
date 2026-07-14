@@ -94,6 +94,8 @@ export const ERROR_CODES = [
   'E_OMISSION_REASON', 'E_LIMIT_PROFILE', 'E_LIMIT_FILES', 'E_LIMIT_FILE_BYTES', 'E_LIMIT_PACK_BYTES',
   'E_CATALOGUE_ID', 'E_DIGEST_MISMATCH', 'E_HASH_INCLUDED', 'E_HASH_COMPLETE', 'E_BASE64_NONCANONICAL',
   'E_PARTITION', 'E_MAP_KEY', 'E_MAP_VALUE_NFC', 'E_CWD',
+  // D2 immune-gate additions
+  'E_PROTO', 'E_STREAM_EXCERPT', 'E_MAP_KEY_DENY',
 ] as const;
 export type EvidenceErrorCode = typeof ERROR_CODES[number];
 

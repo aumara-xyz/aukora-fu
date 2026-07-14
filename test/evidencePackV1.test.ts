@@ -15,10 +15,11 @@ import {
 const KAT_CATALOGUE_ID = '04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13dda82a94cb';
 const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"04b0ae213e8dacb99665015bbc761e9cddef68391902ef0026af13dda82a94cb","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
 const KAT_MIN_DIGEST = '508d43495fcd40dfde386893069848251b82974a395f329bbe8e8696d764a878';
-const KAT_MAX_DIGEST = '6e8f436fa6266400d7816970e904251673c8ad9f0d1e0b8eb8d9c5e2ad99f2aa';
+const KAT_MAX_DIGEST = '2582d3c475a68762aa61cf35c0c3ba9546e4a4f5122c9d8915d6cb3022d6e31d';
 const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28';
 const SHA_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const SHA_ZEROS3 = '709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c';
+const SHA_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'; // sha256("")
 
 const enc = new TextEncoder();
 const NUL = String.fromCharCode(0);
@@ -29,7 +30,9 @@ function mkTextFile(path: string, content: string): EvidenceFileV1 {
   return { path, kind: 'text', originalSizeBytes: bytes.length, includedByteStart: 0, includedByteEnd: bytes.length, truncated: false, fullSha256: h, includedSha256: h, encoding: 'utf8', content };
 }
 function mkTest(command: string[], cwdRelative = '.'): EvidenceTestRunV1 {
-  return { command, cwdRelative, exitCode: 0, stdoutSha256: '3'.repeat(64), stderrSha256: '4'.repeat(64), stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', stderrExcerpt: '', durationMs: null, toolVersions: {} };
+  // D2 amendment 8/15: an honest empty stream — 0 bytes, empty excerpt, and the excerpt (which equals the
+  // whole 0-byte stream) hashes to sha256("") — instead of the internally-impossible '3'*64/'4'*64 fixture.
+  return { command, cwdRelative, exitCode: 0, stdoutSha256: SHA_EMPTY, stderrSha256: SHA_EMPTY, stdoutBytes: 0, stderrBytes: 0, stdoutExcerpt: '', stderrExcerpt: '', durationMs: null, toolVersions: {} };
 }
 function bodyWith(files: EvidenceFileV1[], omissions: EvidencePackV1['omissions'], testRuns: EvidenceTestRunV1[]): EvidencePackV1 {
   const allow = [...files.map((f) => f.path), ...omissions.map((o) => o.path)].sort();
@@ -166,6 +169,103 @@ describe('D1: full-width fence + exact base64 secret scanning', () => {
     const bytes = [...enc.encode('sk-оr-abcdefghijklmnop0123')]; // Cyrillic о U+043E
     const m = bodyWith([mkBinFile('y.bin', bytes)], [], []);
     expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+});
+
+describe('D2: prototype discipline (amendments 1-2)', () => {
+  it('rejects a class-instance / prototype-polluted open map (E_PROTO)', () => {
+    class Holder { node = 'v22'; }
+    const cls = maximalBody(); (cls as any).builderToolVersions = new Holder();
+    expect((validatePackBody(cls) as any).code).toBe('E_PROTO');
+    const cre = maximalBody(); (cre as any).builderToolVersions = Object.create({ node: 'v22' });
+    expect((validatePackBody(cre) as any).code).toBe('E_PROTO');
+  });
+  it('rejects a body whose inherited prototype smuggles an authority literal (E_PROTO)', () => {
+    const b = clone(minimalBody()); delete (b as any).advisoryOnly;
+    Object.setPrototypeOf(b, { advisoryOnly: true });
+    expect((validatePackBody(b) as any).code).toBe('E_PROTO');
+  });
+  it('canonicalizer refuses non-ordinary object prototypes', () => {
+    expect(() => canonicalString(new (class { x = 1; })())).toThrow();
+    expect(canonicalString(Object.assign(Object.create(null), { a: 1 }))).toBe('{"a":1}'); // null proto allowed
+  });
+});
+
+describe('D2: open-map key denylist (amendment 4)', () => {
+  it('refuses denied key families after lowercase + separator stripping (E_MAP_KEY_DENY)', () => {
+    for (const k of ['credential', 'api-key', 'Access.Token', 'private_key', 'secret']) {
+      const m = maximalBody(); (m.builderToolVersions as any)[k] = 'x';
+      expect((validatePackBody(m) as any).code === 'E_MAP_KEY_DENY' || (validatePackBody(m) as any).code === 'E_AUTHORITY_SHAPED_KEY').toBe(true);
+    }
+    const plain = maximalBody(); (plain.builderToolVersions as any)['apikey'] = 'x';
+    expect((validatePackBody(plain) as any).code).toBe('E_MAP_KEY_DENY');
+  });
+});
+
+describe('D2: secret-scan the whole surface (amendment 5)', () => {
+  it('refuses a secret in a map value, repoId, argv, or a path', () => {
+    const mv = maximalBody(); (mv.builderToolVersions as any).node = 'sk-or-abcdefghijklmnop0123';
+    expect((validatePackBody(mv) as any).code).toBe('E_SECRET_CONTENT');
+    const rp = clone(minimalBody()); (rp as any).repoId = 'sk-or-abcdefghijklmnop0123';
+    expect((validatePackBody(rp) as any).code).toBe('E_SECRET_CONTENT');
+    const av = bodyWith([], [], [mkTest(['echo', 'sk-or-abcdefghijklmnop0123'])]);
+    expect((validatePackBody(av) as any).code).toBe('E_SECRET_CONTENT');
+    const pp = bodyWith([], [{ path: 'AKIAIOSFODNN7EXAMPLE.txt', reason: 'binary', originalSizeBytes: null, sha256: null }], []);
+    expect((validatePackBody(pp) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('repoId must be NFC (amendment 14)', () => {
+    const n = clone(minimalBody()); (n as any).repoId = 'café'; // NFD
+    expect((validatePackBody(n) as any).code).toBe('E_NOT_NFC');
+  });
+});
+
+describe('D2: rootAllowlist size ceiling (amendment 3)', () => {
+  it('refuses rootAllowlist longer than the profile maxFiles even with zero files', () => {
+    const paths = Array.from({ length: 4097 }, (_, i) => `f${String(i).padStart(5, '0')}.txt`);
+    const omissions = paths.map((p) => ({ path: p, reason: 'binary', originalSizeBytes: null, sha256: null })) as EvidencePackV1['omissions'];
+    const big = bodyWith([], omissions, []);
+    expect((validatePackBody(big) as any).code).toBe('E_LIMIT_FILES');
+  });
+});
+
+describe('D2: stdout/stderr excerpt vs stream consistency (amendment 8)', () => {
+  it('refuses an excerpt longer than its stream, and a full-length excerpt that mis-hashes', () => {
+    const longer = maximalBody(); (longer.testRuns[0] as any).stdoutExcerpt = 'hello'; (longer.testRuns[0] as any).stdoutBytes = 2;
+    expect((validatePackBody(longer) as any).code).toBe('E_STREAM_EXCERPT');
+    const mism = maximalBody(); (mism.testRuns[0] as any).stdoutExcerpt = 'hi'; (mism.testRuns[0] as any).stdoutBytes = 2; // stdoutSha256 stays sha256("")
+    expect((validatePackBody(mism) as any).code).toBe('E_STREAM_EXCERPT');
+    const honest = maximalBody(); (honest.testRuns[0] as any).stdoutExcerpt = 'hi'; (honest.testRuns[0] as any).stdoutBytes = 2;
+    (honest.testRuns[0] as any).stdoutSha256 = sha256Hex(enc.encode('hi'));
+    expect(validatePackBody(honest).ok).toBe(true); // a truthful complete excerpt is accepted
+  });
+});
+
+describe('D2: lone surrogates + composed projection (amendments 9-11)', () => {
+  it('rejects lone surrogates in canonical strings and body strings', () => {
+    expect(() => canonicalString('\uD800')).toThrow();
+    expect(() => canonicalString({ ['\uDC00']: 1 })).toThrow(); // lone low surrogate as a key
+    const sur = clone(minimalBody()); (sur as any).repoId = 'x\uD800';
+    expect((validatePackBody(sur) as any).code).toBe('E_INVALID_UTF8');
+  });
+  it('composed projection catches a secret hidden with zero-width AND confusables at once', () => {
+    const composed = 'sk-​оr-abcdefghijklmnop0123'; // U+200B zero-width + U+043E Cyrillic о
+    expect(composed.length).toBe(27);                          // ZW(1)+Cyrillic(1)+25 ascii, one invisible+one confusable
+    expect(scanForSecrets(composed).length).toBe(0);           // raw scan misses
+    expect(textHasSecret(composed)).toBe(true);                 // only confusableSkeleton(stripZeroWidth(NFC)) catches
+    const f = bodyWith([mkTextFile('c.txt', composed)], [], []);
+    expect((validatePackBody(f) as any).code).toBe('E_SECRET_CONTENT');
+  });
+});
+
+describe('D2: seal freezes; render refuses post-seal mutation (amendments 6-7)', () => {
+  it('deep-freezes the sealed envelope and refuses a mutated one', () => {
+    const env = sealEnvelope(maximalBody());
+    expect(Object.isFrozen(env)).toBe(true);
+    expect(Object.isFrozen(env.body)).toBe(true);
+    expect(Object.isFrozen(env.body.files[0])).toBe(true);
+    expect(renderForSeat(env, 'A').length).toBeGreaterThan(0);
+    const mutated = { body: { ...env.body, repoId: 'evil/repo' }, packDigest: env.packDigest };
+    expect(() => renderForSeat(mutated as any, 'A')).toThrow();
   });
 });
 

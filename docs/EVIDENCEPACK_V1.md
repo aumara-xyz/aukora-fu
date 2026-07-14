@@ -83,9 +83,11 @@ and secret-free included content — nothing more.
 ## 14. Known-answer vectors (decision 11)
 Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
 `scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
-bytes, its `packDigest` (`508d4349…`), the `catalogueId` (`04b0ae21…`, catalogue v2), a maximal-body
-`packDigest` (`6e8f4360…`), and a fence nonce (`3a23cb4c…a706ccf9…` (full 64-hex) for `deriveFenceNonce("00"×32,
-["hello","world"])`).
+bytes, its `packDigest` (`508d4349…`), the `catalogueId` (`04b0ae21…`, catalogue v2 — the Python oracle
+now recomputes it from a faithful replica of the catalogue table, not just echoing the pinned constant),
+a maximal-body `packDigest` (D2: `2582d3c4…`, updated because the old zero-byte-stream fixture was
+internally impossible under §D2-amendment-8), and a fence nonce (`3a23cb4c…a706ccf9…` (full 64-hex) for
+`deriveFenceNonce("00"×32, ["hello","world"])`).
 
 ## Round-12 (Commit D) amendments
 Building on the settled contract, Commit D adds:
@@ -113,10 +115,42 @@ Building on the settled contract, Commit D adds:
   (`TextDecoder("utf-8",{fatal:true})`) and, on success, run the raw/NFC/zero-width/confusable
   projections, which catches a confusable secret inside valid-UTF-8 base64.
 
+## Round-14 (D2) amendments — final pre-merge immune gate
+D2 closes five fresh red-team P1s while remaining `advisoryOnly:true` / `grantsAuthority:false` and pure:
+- **Prototype discipline (1-2):** every closed-schema object must have an ordinary (`Object.prototype` or
+  `null`) prototype and carry its required fields as **own** properties (`hasOwnProperty`); class
+  instances and prototype-polluted objects are refused (`E_PROTO`) — an inherited `advisoryOnly:true` or
+  envelope field can no longer be smuggled via the prototype chain. The canonicalizer enforces the same.
+- **Allowlist ceiling (3):** `rootAllowlist.length <= profile.maxFiles`, independent of `files.length`
+  (`E_LIMIT_FILES`).
+- **Normalized key denylist (4):** open-map keys are lowercased and stripped of `_ - . space` before
+  screening; the families `apiKey, signingKey, privateKey, accessToken, bearerToken, credential,
+  password, secret, seed, token, approve, apply, grant, unlock, mutate, sign(/signed/signing/signature),
+  authoriz*` are refused as a substring (`E_MAP_KEY_DENY`), in addition to the existing boundary-anchored
+  `E_AUTHORITY_SHAPED_KEY` screen.
+- **Whole-surface secret scan (5):** every open-map **value**, `repoId`, each argv element, `cwdRelative`,
+  and every path (file/omission/allowlist) is run through the secret projections, not just file content
+  and test excerpts (`E_SECRET_CONTENT`).
+- **Seal + render integrity (6-7):** `sealEnvelope` digests a **canonical clone** of the accepted body
+  and returns a **recursively frozen** envelope; `renderForSeat` **revalidates** and refuses any invalid
+  or post-seal-mutated envelope (throws `<code>:<path>`).
+- **Excerpt vs stream consistency (8):** for stdout and stderr, `UTF8(excerpt).length <= streamBytes`,
+  and when equal the excerpt IS the whole stream so `SHA256(UTF8(excerpt)) === streamSha256`
+  (`E_STREAM_EXCERPT`). This defeats a truthful tiny stream paired with a lying oversized excerpt.
+- **Lone surrogates (9-10):** the canonicalizer rejects lone surrogates in string keys and values
+  (`E_INVALID_UTF8`) — they have no canonical UTF-8 encoding.
+- **Composed projection (11):** the secret scan adds `confusableSkeleton(stripZeroWidth(NFC(text)))`, so a
+  secret disguised with zero-width joiners **and** confusables **simultaneously** (which slips every
+  single-transform projection) is still caught.
+- **NFC repoId (14):** `repoId` must be NFC (`E_NOT_NFC`).
+- **Honest maximal KAT (15):** the maximal-body stream fixture is now a truthful empty stream
+  (`sha256("")`), and its `packDigest` KAT is updated to `2582d3c4…`, reproduced by the Python oracle.
+
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,
 E_AUTHORITY_SHAPED_KEY, E_NOT_NFC, E_REL_PATH, E_NUL, E_INVALID_UTF8, E_BAD_INTEGER, E_BAD_SHA,
 E_BAD_GITSHA, E_BASE_PAIR, E_ARRAY_UNSORTED, E_DUP_PATH, E_DUP_TEST, E_BAD_RANGE, E_BINARY_INLINE,
 E_BAD_ENUM, E_CONTENT_LENGTH, E_SECRET_CONTENT, E_OMISSION_REASON, E_LIMIT_PROFILE, E_LIMIT_FILES,
 E_LIMIT_FILE_BYTES, E_LIMIT_PACK_BYTES, E_CATALOGUE_ID, E_DIGEST_MISMATCH, E_HASH_INCLUDED,
-E_HASH_COMPLETE, E_BASE64_NONCANONICAL, E_PARTITION, E_MAP_KEY, E_MAP_VALUE_NFC, E_CWD`.
+E_HASH_COMPLETE, E_BASE64_NONCANONICAL, E_PARTITION, E_MAP_KEY, E_MAP_VALUE_NFC, E_CWD,
+E_PROTO, E_STREAM_EXCERPT, E_MAP_KEY_DENY`.

@@ -60,14 +60,25 @@ export function scanForSecrets(text: string): SecretMatch[] {
   return matches;
 }
 
-/** The four defensive projections a secret might hide behind (contract decision 12). */
+function stripZeroWidth(s: string): string {
+  let out = s;
+  for (const z of SECRET_CATALOGUE.zeroWidth) out = out.split(z).join('');
+  return out;
+}
+function confusableSkeleton(s: string): string {
+  let out = '';
+  for (const ch of s) out += (SECRET_CATALOGUE.confusables[ch] ?? ch);
+  return out;
+}
+
+/** The defensive projections a secret might hide behind (contract decision 12; D2 adds the composed
+ *  projection so a secret disguised with NFD + zero-width + confusables simultaneously is still caught). */
 export function secretProjections(text: string): string[] {
   const nfc = text.normalize('NFC');
-  let zw = text;
-  for (const z of SECRET_CATALOGUE.zeroWidth) zw = zw.split(z).join('');
-  let skeleton = '';
-  for (const ch of text) skeleton += (SECRET_CATALOGUE.confusables[ch] ?? ch);
-  return [text, nfc, zw, skeleton];
+  const zw = stripZeroWidth(text);
+  const skeleton = confusableSkeleton(text);
+  const composed = confusableSkeleton(stripZeroWidth(nfc)); // D2 amendment 11
+  return [text, nfc, zw, skeleton, composed];
 }
 
 /** True if ANY projection of `text` contains a catalogue secret (fail-closed). */
