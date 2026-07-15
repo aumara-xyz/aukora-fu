@@ -80,20 +80,33 @@ A pure pack cannot prove disk fidelity, provider honesty, or real command execut
 internal consistency, tamper-evidence, catalogue binding, content/range agreement, and limit compliance.
 
 **Secret scanning is best-effort, not a guarantee.** The scanner refuses content matching a *curated*
-catalogue of known credential shapes, folded through NFC + NFKC + zero-width/combining-mark stripping +
-a confusable skeleton so common Unicode obfuscation cannot dodge a catalogued shape. It deliberately has
-**no generic entropy backstop**: a pack's legitimate purpose is to ship file evidence (base64 binaries,
-minified code, hashes, git SHAs) which is itself high-entropy, so an entropy detector would either
-false-positive on real evidence or be tuned too loose to help. Consequently a *novel* credential format
-with no catalogued shape, or a low-entropy structured secret, can pass. **"No secret found" is advisory —
-never treat it as proof the pack is secret-free.** Adversarial red-teaming (Round-14) confirmed this bound
-is real; the catalogue was widened in response, but exhaustive detection is impossible by construction.
+catalogue of known credential shapes, folded through NFC + NFKC + NFD + zero-width/combining-mark stripping +
+a confusable skeleton so common Unicode obfuscation (compatibility, precomposed/decomposed, combining-mark
+splits) cannot dodge a catalogued shape. It deliberately has **no generic entropy backstop**: a pack's
+legitimate purpose is to ship file evidence (base64 binaries, minified code, hashes, git SHAs) which is
+itself high-entropy, so an entropy detector would either false-positive on real evidence or be tuned too
+loose to help. Consequently a *novel* credential format with no catalogued shape, or a low-entropy
+structured secret, can pass. **"No secret found" is advisory — never treat it as proof the pack is
+secret-free.** Adversarial red-teaming (Round-14) confirmed this bound is real; the catalogue was widened in
+response, but exhaustive detection is impossible by construction.
+
+**Secret scanning is O(n), not O(n²).** The `url-userinfo` credential-URL detector (`scheme://user:pass@host`)
+is a **bounded linear scanner**, not a regex (its former greedy regex was an O(n²) ReDoS on benign long runs).
+Additionally, every *catalogue regex* whose greedy quantifier is followed by a required token now has a
+**bounded** upper limit (`{m,N}`, not `{m,}`) — an unbounded greedy run before a required literal backtracks
+O(len) at each of O(len) start positions, i.e. O(n²) on adversarial repeated-prefix input (`API…`, `eyJ…`,
+`-----BEGIN …`). With the bounds, per-start-position work is O(N), so scanning is O(n·N) = linear. The upper
+bounds (scheme ≤ 40 / userinfo ≤ 512 for the scanner; and per-pattern segment ceilings such as jwt ≤ 256/4096/512,
+env-value ≤ 4096) are **best-effort ceilings**: a matchable run longer than its bound is not matched. This
+keeps `validatePackBody` linear on legal within-limits input (minified JS, lockfiles, base64 blobs) while
+still catching realistic secrets. (Terminal `{m,}` quantifiers with no trailing token do not backtrack and
+remain open.)
 
 ## 14. Known-answer vectors (decision 11)
 Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
 `scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
-bytes, its `packDigest` (`352c05ab…`), the `catalogueId` (`f092790c…`, catalogue v2), a maximal-body
-`packDigest` (`e8e3d3f3…`), and the full-width fence nonce
+bytes, its `packDigest` (`8c02b487…`), the `catalogueId` (`9855772f…`, catalogue v3), a maximal-body
+`packDigest` (`93f8e388…`), and the full-width fence nonce
 `3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28` for `deriveFenceNonce("00"×32,
 ["hello","world"])`.
 
@@ -152,6 +165,35 @@ Building on the settled contract, Commit D adds:
   re-derives `catalogueId` (and the min/max KAT digests). A generic entropy backstop was **deliberately
   omitted** — see §13; it would refuse legitimate high-entropy file evidence. Secret detection is
   best-effort, not exhaustive.
+
+## Round-16 (D4) membrane repair
+Three reachable defects found by the Round-15 exact-head audit are closed:
+- **Snapshot-first seal + exotic array rejection.** `sealEnvelope` previously validated the live body then
+  *re-read* it while cloning; an accessor-defined array index (arrays were screened only with `Array.isArray`)
+  could return clean bytes to validation and dirty bytes to the clone, producing a digest-bound value that
+  validation never approved. D4 takes ONE canonical snapshot, then validates, digests, and freezes that exact
+  snapshot. `verifyEnvelope` and `renderForSeat` are likewise snapshot-first, so the same read-twice split
+  cannot resurface in the verify/render paths for a live-accessor envelope. Additionally, every array
+  container is run through `ordinaryDataArray`: a non-standard prototype,
+  symbol own key, hole (sparse array), non-index own property, non-enumerable index, or accessor index is
+  refused (`E_PROTO`).
+- **NFD-first projection.** NFC/NFKC *compose*, so a precomposed diacritic lookalike (e.g. `ó` for `o`,
+  `Á` for `A`) survived every projection and its base letter never surfaced. D4 adds
+  `confusableSkeleton(stripZeroWidth(NFD(text)))`: NFD decomposes the precomposed char into base + combining
+  mark, which `\p{M}` stripping removes, exposing the base letter where the catalogue matches. Decomposed and
+  precomposed regression vectors are pinned.
+- **Bounded linear url-userinfo scanner + catalogue-wide ReDoS bounding.** The `scheme://user:pass@host`
+  detector was a greedy regex that made `validatePackBody` O(n²) on benign long runs (a proven ReDoS: 40 KB ≈
+  12.6 s, 1 MB ≈ 2 h). D4 replaces it with `scanUrlUserinfo`, a bounded O(n) scan (each `://` located once;
+  scheme + userinfo checked in bounded windows), listed in `SECRET_CATALOGUE.scanners` so `catalogueId` still
+  binds it. Adversarial re-testing found the **same quadratic class in two more catalogue regexes**
+  (`env-secret-assign` on `API…`, `jwt` on `eyJ…`; `repoId='API'×n` took ~7 s at 40 KB) — so D4 additionally
+  **bounds every greedy quantifier that precedes a required token** (`{m,N}` not `{m,}`) across the catalogue
+  (pem/jwt/env-secret-assign/sendgrid); terminal `{m,}` quantifiers are left open. All prefix classes now scan
+  in near-linear time (a scaling regression test asserts sub-quadratic for `API…`/`eyJ…`/`-----BEGIN …`/`SG.…`/
+  `a://…`). Schema bumped to `-v3`; KATs re-pinned. This scope extension beyond the round's stated url-userinfo
+  change is deliberate — leaving the other two quadratic patterns would keep the immune gate DoS-able and make
+  the "linear" claim false.
 
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,

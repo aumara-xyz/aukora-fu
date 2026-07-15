@@ -7,15 +7,15 @@ import {
   canonicalString, canonicalBytes, verifyCanonicalWire,
   packDigest, sha256Hex, uint64BE,
   deriveFenceNonce, fenceOpen, fenceCollisionFree,
-  SECRET_CATALOGUE, catalogueId, scanForSecrets, textHasSecret,
+  SECRET_CATALOGUE, catalogueId, scanForSecrets, textHasSecret, scanUrlUserinfo,
   validatePackBody, validateEnvelope, sealEnvelope, verifyEnvelope, renderForSeat,
 } from '../src/evidence/index';
 
 // ── Pinned known-answer vectors (contract decision 11; reproduced by scripts/pyref + Node + Bun) ──
-const KAT_CATALOGUE_ID = 'f092790cdefb20612a4bfab563cd19fffaf742238a8d683396660027a17a7565';
-const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"f092790cdefb20612a4bfab563cd19fffaf742238a8d683396660027a17a7565","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
-const KAT_MIN_DIGEST = '352c05abe2288cd516bb6da0bfed0fe4896f5408fe16a8989389a7156cb30747';
-const KAT_MAX_DIGEST = 'e8e3d3f3f42036a721da70368a699c2e9a5f657e433830dc714243e3be10b625'; // D2: honest zero-byte stream
+const KAT_CATALOGUE_ID = '39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944';
+const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
+const KAT_MIN_DIGEST = '7cc6359cd271579607f324d5567fba12858f7c3378ea3c9df3b091dd1defec9a';
+const KAT_MAX_DIGEST = '613beff622edbc98f1b8105b15d14f281cb594059eb3819561b37323a76f4601'; // D2: honest zero-byte stream
 const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28';
 const SHA_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const SHA_ZEROS3 = '709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c';
@@ -373,5 +373,126 @@ describe('R14 red-team round 3: NFKC folding + credential shapes', () => {
     expect(textHasSecret('a'.repeat(40))).toBe(false);              // git-sha-shaped
     expect(textHasSecret('deadbeef'.repeat(8))).toBe(false);         // 64-hex digest
     expect(validatePackBody(maximalBody()).ok).toBe(true);          // real base64 file content in fixture
+  });
+});
+
+// ── D4 change 3: bounded LINEAR url-userinfo scanner (replaces the O(n^2) ReDoS regex) ────────────
+describe('D4: url-userinfo bounded linear scanner + scaling regression', () => {
+  it('still catches credential URLs (parity with the removed regex)', () => {
+    expect(scanUrlUserinfo('postgresql://app:S3cr3tPw@10.0.3.4:5432/db')).toBe(true);
+    expect(scanUrlUserinfo('mongodb://root:hunter2@db.internal:27017')).toBe(true);
+    expect(textHasSecret('redis://user:passw0rd@cache:6379')).toBe(true);
+    // fullwidth-obfuscated credential URL folds via NFKC then the scanner catches it
+    const fw = [...'postgres://u:p4sswXYZ@h/db'].map((c) => { const n = c.codePointAt(0)!; return (n >= 0x21 && n <= 0x7e) ? String.fromCodePoint(n - 0x21 + 0xff01) : c; }).join('');
+    expect(textHasSecret(fw)).toBe(true);
+  });
+  it('does NOT false-positive on URLs without userinfo credentials', () => {
+    expect(scanUrlUserinfo('https://example.com:8080/path')).toBe(false);
+    expect(scanUrlUserinfo('https://cdn.example.com/img@2x.png')).toBe(false); // @ in path, no user:pass
+    expect(scanUrlUserinfo('see https://docs.example.com for more')).toBe(false);
+    expect(textHasSecret('AAAA')).toBe(false);
+  });
+  it('SCALING REGRESSION: no catalogue regex is O(n^2) on adversarial repeated-prefix input', () => {
+    // The removed url regex AND the env-secret-assign / jwt regexes were O(n^2): doubling n quadrupled time
+    // (repoId='API'*n took ~7s at 40KB). All greedy-before-required-token quantifiers are now bounded ⇒ O(n):
+    // doubling n stays well under a quadratic 4x factor, and every prefix scans fast. Cover each offender.
+    const time = (unit: string, n: number) => { const s = unit.repeat(Math.ceil(n / unit.length)).slice(0, n); const t0 = performance.now(); textHasSecret(s); return performance.now() - t0; };
+    for (const unit of ['a', 'API', 'eyJ', '-----BEGIN ', 'SG.', 'a://']) {
+      time(unit, 20000); // warm up
+      const t40 = Math.max(time(unit, 40000), 1);
+      const t160 = time(unit, 160000); // 4x the input
+      expect(t160 / t40).toBeLessThan(8);     // quadratic would be ~16x; require clearly sub-quadratic
+      expect(t160).toBeLessThan(3000);         // 160KB adversarial must scan fast (was minutes for these)
+    }
+  });
+});
+
+// ── D4 change 2: NFD-first projection — decomposed/precomposed evasion ─────────────────────────────
+describe('D4: NFD-first secret projection (decomposed / precomposed)', () => {
+  it('a PRECOMPOSED diacritic lookalike inside a secret is caught (NFD decomposes it)', () => {
+    // 'sk-ór-...' with a PRECOMPOSED U+00F3 where the openrouter pattern expects 'o'. NFC/NFKC keep it
+    // composed (so it would survive them); NFD decomposes to 'o'+U+0301, stripZeroWidth removes the mark.
+    const precomposed = 'sk-ór-' + 'a'.repeat(20);
+    expect(precomposed.normalize('NFC')).toBe(precomposed);      // already NFC: not caught by NFC/NFKC path
+    expect(textHasSecret(precomposed)).toBe(true);               // caught by the NFD-first projection
+    const m = bodyWith([mkTextFile('leak.ts', precomposed)], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('the DECOMPOSED form (base + combining mark) is also caught', () => {
+    const decomposed = 'sk-ór-' + 'a'.repeat(20);         // o + combining acute
+    expect(textHasSecret(decomposed)).toBe(true);
+  });
+  it('a precomposed AKIA lookalike (Á for A) is caught', () => {
+    const aws = 'ÁKIA' + 'ABCDEFGHIJKLMNOP';               // Á (U+00C1) NFD-decomposes to A + U+0301
+    expect(textHasSecret(aws)).toBe(true);
+  });
+});
+
+// ── D4 change 1: snapshot-first sealEnvelope + reject exotic array descriptors ─────────────────────
+describe('D4: snapshot-first seal + exotic array-descriptor rejection', () => {
+  const H = SHA_HELLO; // reuse a known sha for a 'hello' file
+  it('an accessor (getter) at an array index is refused (E_PROTO)', () => {
+    const m: any = clone(minimalBody());
+    const files: any = [];
+    Object.defineProperty(files, '0', { enumerable: true, configurable: true, get() { return mkTextFile('a.ts', 'hello'); } });
+    Object.defineProperty(files, 'length', { value: 1, writable: true });
+    m.files = files; m.rootAllowlist = ['a.ts'];
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('a sparse array (hole) is refused (E_PROTO)', () => {
+    const m: any = clone(maximalBody());
+    const files: any = [m.files[0]]; files[2] = m.files[1]; // index 1 is a hole
+    m.files = files;
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('a symbol own key on an array is refused (E_PROTO)', () => {
+    const m: any = clone(minimalBody());
+    const files: any = []; (files as any)[Symbol('x')] = 'y';
+    m.files = files;
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('a non-standard array prototype is refused (E_PROTO)', () => {
+    const m: any = clone(minimalBody());
+    const files: any = []; Object.setPrototypeOf(files, { evil: true });
+    m.files = files;
+    expect((validatePackBody(m) as any).code).toBe('E_PROTO');
+  });
+  it('snapshot-first seal: a getter that flips clean→secret cannot split validate from digest', () => {
+    // Under the OLD order (validate live, then re-read while cloning) a getter returning clean to validation
+    // and secret to the clone produced a digest-bound secret that validation never approved. Snapshot-first
+    // reads the body ONCE, so what is validated is byte-identical to what is digested and frozen: the seal
+    // either fails closed or emits a consistent, secret-free envelope — never a digest-bound secret.
+    const m: any = clone(minimalBody());
+    let reads = 0;
+    const cleanFile = mkTextFile('a.ts', 'hello');
+    const secretFile = mkTextFile('a.ts', 'AKIA' + 'ABCDEFGHIJKLMNOP');
+    const files: any = [];
+    Object.defineProperty(files, '0', { enumerable: true, configurable: true, get() { return reads++ < 1 ? cleanFile : secretFile; } });
+    Object.defineProperty(files, 'length', { value: 1, writable: true });
+    m.files = files; m.rootAllowlist = ['a.ts'];
+    let env: any = null, threw = false;
+    try { env = sealEnvelope(m); } catch { threw = true; }
+    if (!threw) {
+      expect(verifyEnvelope(env)).toBe(true);                 // digest matches the sealed body (no split)
+      expect(JSON.stringify(env.body)).not.toContain('AKIA'); // the later 'secret' read never entered the seal
+    }
+    void H;
+  });
+  it('snapshot-first verifyEnvelope: a live accessor `body` cannot verify true while binding a secret', () => {
+    // Same read-twice class as sealEnvelope, one function over: verifyEnvelope must snapshot the envelope
+    // once so validate and the packDigest echo read identical bytes. No getter parity may return true here.
+    const okBody: any = clone(minimalBody());
+    const secretBody: any = clone(minimalBody()); secretBody.builderToolVersions = { node: 'AKIA' + 'ABCDEFGHIJKLMNOP' };
+    const dSecret = packDigest(secretBody);
+    let anyLeak = false;
+    for (let period = 1; period <= 5; period++) for (let phase = 0; phase < period; phase++) {
+      let reads = 0;
+      const env: any = { get body() { const r = reads++; return ((r + phase) % period === 0) ? okBody : secretBody; }, packDigest: dSecret };
+      let v = false; try { v = verifyEnvelope(env); } catch { v = false; }
+      if (v) anyLeak = true;
+    }
+    expect(anyLeak).toBe(false);
+    // and a legitimately sealed envelope still verifies
+    expect(verifyEnvelope(sealEnvelope(clone(minimalBody())))).toBe(true);
   });
 });

@@ -25,14 +25,14 @@ def fence_nonce(pack_digest_hex: str, contents) -> str:
     raise RuntimeError('E_FENCE_NONCE')
 
 SECRET_CATALOGUE = {
-    "schema": "aukora-fu-secret-catalogue-v2",
+    "schema": "aukora-fu-secret-catalogue-v3",
     "patterns": [
         {"id": "openrouter-key", "pattern": "sk-or-[A-Za-z0-9_\\-]{16,}", "flags": "g"},
         {"id": "openai-key", "pattern": "sk-[A-Za-z0-9]{20,}", "flags": "g"},
         {"id": "aws-access-key-id", "pattern": "AKIA[0-9A-Z]{16}", "flags": "g"},
-        {"id": "pem-private-key", "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----", "flags": "g"},
-        {"id": "jwt", "pattern": "eyJ[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{6,}", "flags": "g"},
-        {"id": "env-secret-assign", "pattern": "(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]*\\s*=\\s*\\S{8,}", "flags": "gi"},
+        {"id": "pem-private-key", "pattern": "-----BEGIN [A-Z ]{0,64}PRIVATE KEY-----", "flags": "g"},
+        {"id": "jwt", "pattern": "eyJ[A-Za-z0-9_\\-]{10,256}\\.[A-Za-z0-9_\\-]{10,4096}\\.[A-Za-z0-9_\\-]{6,512}", "flags": "g"},
+        {"id": "env-secret-assign", "pattern": "(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]{0,64}\\s*=\\s*\\S{8,4096}", "flags": "gi"},
         {"id": "github-token", "pattern": "(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}", "flags": "g"},
         {"id": "slack-token", "pattern": "xox[baprs]-[A-Za-z0-9-]{10,}", "flags": "g"},
         {"id": "google-api-key", "pattern": "AIza[A-Za-z0-9_\\-]{35}", "flags": "g"},
@@ -40,10 +40,13 @@ SECRET_CATALOGUE = {
         {"id": "npm-token", "pattern": "npm_[A-Za-z0-9]{30,}", "flags": "g"},
         {"id": "gitlab-pat", "pattern": "glpat-[A-Za-z0-9_\\-]{16,}", "flags": "g"},
         {"id": "anthropic-key", "pattern": "sk-ant-[A-Za-z0-9_\\-]{20,}", "flags": "g"},
-        {"id": "sendgrid-key", "pattern": "SG\\.[A-Za-z0-9_\\-]{16,}\\.[A-Za-z0-9_\\-]{16,}", "flags": "g"},
+        {"id": "sendgrid-key", "pattern": "SG\\.[A-Za-z0-9_\\-]{16,512}\\.[A-Za-z0-9_\\-]{16,}", "flags": "g"},
         {"id": "azure-account-key", "pattern": "AccountKey=[A-Za-z0-9+/]{40,}={0,2}", "flags": "g"},
-        {"id": "url-userinfo-secret", "pattern": "[a-z][a-z0-9+.\\-]*://[^\\s/:@]+:[^\\s/@]+@", "flags": "gi"},
     ],
+    # D4: url-userinfo moved to the bounded linear scanUrlUserinfo (was an O(n^2) ReDoS regex). Listed here
+    # so catalogueId binds it. The Python oracle only reproduces catalogueId/digests, not detection, so it
+    # simply mirrors this field.
+    "scanners": ["url-userinfo-v1"],
     "confusables": {
         "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x",
         "ѕ": "s", "і": "i", "ј": "j", "һ": "h", "ԁ": "d", "ԛ": "q",
@@ -89,9 +92,9 @@ def maximal_body():
 if __name__ == '__main__':
     import sys
     KAT = {
-        "CATALOGUE_ID": "f092790cdefb20612a4bfab563cd19fffaf742238a8d683396660027a17a7565",
-        "MIN_DIGEST": "352c05abe2288cd516bb6da0bfed0fe4896f5408fe16a8989389a7156cb30747",
-        "MAX_DIGEST": "e8e3d3f3f42036a721da70368a699c2e9a5f657e433830dc714243e3be10b625",
+        "CATALOGUE_ID": "39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944",
+        "MIN_DIGEST": "7cc6359cd271579607f324d5567fba12858f7c3378ea3c9df3b091dd1defec9a",
+        "MAX_DIGEST": "613beff622edbc98f1b8105b15d14f281cb594059eb3819561b37323a76f4601",
         "FENCE": "3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28",
     }
     got = {

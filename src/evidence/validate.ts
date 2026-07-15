@@ -67,6 +67,33 @@ function ordinaryDataObject(v: unknown, p: string): ValidationResult {
   }
   return OK;
 }
+
+/**
+ * D4: an array container must be an ordinary, dense Array whose only own properties are its contiguous
+ * `0..length-1` data indices (all enumerable) plus `length`. Reject a non-standard prototype, symbol own
+ * keys, holes (sparse arrays), non-index own properties, non-enumerable indices, and accessor (get/set)
+ * indices — each of which lets an element read differently between validation and canonicalization, or
+ * hides data from `Object.keys`/the digest. Mirrors ordinaryDataObject for array containers (which are
+ * otherwise screened only with `Array.isArray`).
+ */
+function ordinaryDataArray(v: unknown, p: string): ValidationResult {
+  if (!Array.isArray(v)) return err('E_WRONG_TYPE', p, 'expected array');
+  if (Object.getPrototypeOf(v) !== Array.prototype) return err('E_PROTO', p, 'non-standard array prototype');
+  if (Object.getOwnPropertySymbols(v).length > 0) return err('E_PROTO', p, 'symbol own property on array');
+  const n = v.length;
+  let dataCount = 0;
+  for (const k of Object.getOwnPropertyNames(v)) {
+    if (k === 'length') continue;
+    const idx = Number(k);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= n || String(idx) !== k) return err('E_PROTO', `${p}.${k}`, 'non-index own property on array');
+    const d = Object.getOwnPropertyDescriptor(v, k);
+    if (!d || d.get !== undefined || d.set !== undefined) return err('E_PROTO', `${p}[${k}]`, 'accessor array element');
+    if (!d.enumerable) return err('E_PROTO', `${p}[${k}]`, 'non-enumerable array element');
+    dataCount++;
+  }
+  if (dataCount !== n) return err('E_PROTO', p, 'sparse array (holes)');
+  return OK;
+}
 function hasLoneSurrogate(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
@@ -152,12 +179,13 @@ function checkStringMap(v: unknown, p: string): ValidationResult {
   return OK;
 }
 function checkPathArraySortedUnique(v: unknown, p: string): ValidationResult {
-  if (!Array.isArray(v)) return err('E_WRONG_TYPE', p, 'expected array');
-  for (let i = 0; i < v.length; i++) {
-    const c = checkRelPosixPath(v[i], `${p}[${i}]`); if (!c.ok) return c;
+  const oa = ordinaryDataArray(v, p); if (!oa.ok) return oa;
+  const arr = v as unknown[];
+  for (let i = 0; i < arr.length; i++) {
+    const c = checkRelPosixPath(arr[i], `${p}[${i}]`); if (!c.ok) return c;
     if (i > 0) {
-      if ((v[i - 1] as string) > (v[i] as string)) return err('E_ARRAY_UNSORTED', `${p}[${i}]`, 'not sorted');
-      if ((v[i - 1] as string) === (v[i] as string)) return err('E_DUP_PATH', `${p}[${i}]`, 'duplicate');
+      if ((arr[i - 1] as string) > (arr[i] as string)) return err('E_ARRAY_UNSORTED', `${p}[${i}]`, 'not sorted');
+      if ((arr[i - 1] as string) === (arr[i] as string)) return err('E_DUP_PATH', `${p}[${i}]`, 'duplicate');
     }
   }
   return OK;
@@ -215,11 +243,12 @@ function checkOmission(v: unknown, p: string): ValidationResult {
 function checkTest(v: unknown, p: string): ValidationResult {
   const c = closedObject(v, TEST_KEYS, p); if (!c.ok) return c;
   const o = v as Record<string, unknown>;
-  if (!Array.isArray(o.command)) return err('E_WRONG_TYPE', `${p}.command`, 'array');
-  for (let i = 0; i < o.command.length; i++) {
-    const cs = checkString(o.command[i], `${p}.command[${i}]`); if (!cs.ok) return cs;
-    if (!isNfc(o.command[i] as string)) return err('E_NOT_NFC', `${p}.command[${i}]`, 'argv not NFC');
-    if (textHasSecret(o.command[i] as string)) return err('E_SECRET_CONTENT', `${p}.command[${i}]`, 'secret-shaped argv'); // amendment 5
+  const oc = ordinaryDataArray(o.command, `${p}.command`); if (!oc.ok) return oc;
+  const cmd = o.command as unknown[];
+  for (let i = 0; i < cmd.length; i++) {
+    const cs = checkString(cmd[i], `${p}.command[${i}]`); if (!cs.ok) return cs;
+    if (!isNfc(cmd[i] as string)) return err('E_NOT_NFC', `${p}.command[${i}]`, 'argv not NFC');
+    if (textHasSecret(cmd[i] as string)) return err('E_SECRET_CONTENT', `${p}.command[${i}]`, 'secret-shaped argv'); // amendment 5
   }
   const cw = checkString(o.cwdRelative, `${p}.cwdRelative`); if (!cw.ok) return cw;
   const cwd = o.cwdRelative as string;
@@ -246,11 +275,12 @@ function checkTest(v: unknown, p: string): ValidationResult {
 }
 
 function checkArraySorted(v: unknown, p: string, each: (x: unknown, pp: string) => ValidationResult, key: (x: unknown) => string, dupCode: EvidenceErrorCode | null): ValidationResult {
-  if (!Array.isArray(v)) return err('E_WRONG_TYPE', p, 'expected array');
+  const oa = ordinaryDataArray(v, p); if (!oa.ok) return oa;
+  const arr = v as unknown[];
   let prev: string | null = null;
-  for (let i = 0; i < v.length; i++) {
-    const c = each(v[i], `${p}[${i}]`); if (!c.ok) return c;
-    const k = key(v[i]);
+  for (let i = 0; i < arr.length; i++) {
+    const c = each(arr[i], `${p}[${i}]`); if (!c.ok) return c;
+    const k = key(arr[i]);
     if (prev !== null) {
       if (prev > k) return err('E_ARRAY_UNSORTED', `${p}[${i}]`, 'not sorted');
       if (dupCode !== null && prev === k) return err(dupCode, `${p}[${i}]`, 'duplicate identity');

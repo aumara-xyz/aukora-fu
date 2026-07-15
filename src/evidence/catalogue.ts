@@ -14,19 +14,28 @@ export interface SecretPatternV1 { readonly id: string; readonly pattern: string
 export interface SecretCatalogueV1 {
   readonly schema: string;
   readonly patterns: readonly SecretPatternV1[];
+  // Named bounded linear scanners (not regexes). Listed here so catalogueId binds them too — a scanner
+  // change re-derives the id exactly like a pattern change. D4 moved url-userinfo out of `patterns`
+  // (its greedy regex was a proven O(n^2) ReDoS) into a bounded linear scanner (see scanUrlUserinfo).
+  readonly scanners: readonly string[];
   readonly confusables: Readonly<Record<string, string>>;
   readonly zeroWidth: readonly string[];
 }
 
 export const SECRET_CATALOGUE: SecretCatalogueV1 = {
-  schema: 'aukora-fu-secret-catalogue-v2',
+  schema: 'aukora-fu-secret-catalogue-v3',
   patterns: [
+    // NOTE (D4 anti-ReDoS): every greedy quantifier that is FOLLOWED by a required token has a bounded upper
+    // limit ({m,N}, not {m,}). An unbounded greedy run before a required literal backtracks O(len) at each of
+    // O(len) start positions ⇒ O(n^2) on adversarial repeated-prefix input (the same class as the removed
+    // url-userinfo regex). Terminal `{m,}` quantifiers (no trailing token) do not backtrack and stay open.
+    // The upper bounds are best-effort ceilings (see §13) — a matchable run longer than the bound is missed.
     { id: 'openrouter-key', pattern: 'sk-or-[A-Za-z0-9_\\-]{16,}', flags: 'g' },
     { id: 'openai-key', pattern: 'sk-[A-Za-z0-9]{20,}', flags: 'g' },
     { id: 'aws-access-key-id', pattern: 'AKIA[0-9A-Z]{16}', flags: 'g' },
-    { id: 'pem-private-key', pattern: '-----BEGIN [A-Z ]*PRIVATE KEY-----', flags: 'g' },
-    { id: 'jwt', pattern: 'eyJ[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{10,}\\.[A-Za-z0-9_\\-]{6,}', flags: 'g' },
-    { id: 'env-secret-assign', pattern: '(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]*\\s*=\\s*\\S{8,}', flags: 'gi' },
+    { id: 'pem-private-key', pattern: '-----BEGIN [A-Z ]{0,64}PRIVATE KEY-----', flags: 'g' },
+    { id: 'jwt', pattern: 'eyJ[A-Za-z0-9_\\-]{10,256}\\.[A-Za-z0-9_\\-]{10,4096}\\.[A-Za-z0-9_\\-]{6,512}', flags: 'g' },
+    { id: 'env-secret-assign', pattern: '(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]{0,64}\\s*=\\s*\\S{8,4096}', flags: 'gi' },
     { id: 'github-token', pattern: '(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}', flags: 'g' },
     { id: 'slack-token', pattern: 'xox[baprs]-[A-Za-z0-9-]{10,}', flags: 'g' },
     { id: 'google-api-key', pattern: 'AIza[A-Za-z0-9_\\-]{35}', flags: 'g' },
@@ -34,13 +43,15 @@ export const SECRET_CATALOGUE: SecretCatalogueV1 = {
     { id: 'npm-token', pattern: 'npm_[A-Za-z0-9]{30,}', flags: 'g' },
     { id: 'gitlab-pat', pattern: 'glpat-[A-Za-z0-9_\\-]{16,}', flags: 'g' },
     { id: 'anthropic-key', pattern: 'sk-ant-[A-Za-z0-9_\\-]{20,}', flags: 'g' },
-    { id: 'sendgrid-key', pattern: 'SG\\.[A-Za-z0-9_\\-]{16,}\\.[A-Za-z0-9_\\-]{16,}', flags: 'g' },
+    { id: 'sendgrid-key', pattern: 'SG\\.[A-Za-z0-9_\\-]{16,512}\\.[A-Za-z0-9_\\-]{16,}', flags: 'g' },
     { id: 'azure-account-key', pattern: 'AccountKey=[A-Za-z0-9+/]{40,}={0,2}', flags: 'g' },
-    // A URL carrying userinfo credentials (scheme://user:pass@host) — the most common real leak
-    // (postgres/mysql/mongodb/redis/amqp/https connection strings). Shape-based, not entropy-based,
-    // so it never false-positives on legitimate high-entropy file evidence (base64, hashes, minified code).
-    { id: 'url-userinfo-secret', pattern: '[a-z][a-z0-9+.\\-]*://[^\\s/:@]+:[^\\s/@]+@', flags: 'gi' },
   ],
+  // url-userinfo (scheme://user:pass@host — the most common real leak: postgres/mysql/mongodb/redis/amqp/
+  // https connection strings) is handled by the bounded linear scanUrlUserinfo, NOT a regex. Its former
+  // greedy regex `[a-z][a-z0-9+.-]*://...` was a proven O(n^2) ReDoS: the scheme class matched long benign
+  // lowercase runs then backtracked for `://` at every start position. The scanner is O(n) and still
+  // shape-based, so it never false-positives on legitimate high-entropy file evidence.
+  scanners: ['url-userinfo-v1'],
   // Cyrillic/Greek homoglyphs → ASCII skeleton (extend deliberately; each change re-derives catalogueId).
   confusables: {
     'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x',
@@ -95,21 +106,67 @@ function confusableSkeleton(s: string): string {
  *  (U+1D400…), superscript, and circled lookalikes are compatibility-equivalent to ASCII but have NO
  *  canonical (NFC) decomposition and are absent from the small confusables table, so only NFKC folds them
  *  back to ASCII where the catalogue regexes match. This closes the whole compatibility-confusable class in
- *  one step (a proven fullwidth/math-monospace bypass of a real credential). */
+ *  one step (a proven fullwidth/math-monospace bypass of a real credential).
+ *  D4 adds the NFD-first projection `confusableSkeleton(stripZeroWidth(NFD(text)))`: NFC/NFKC *compose*,
+ *  so a precomposed diacritic lookalike (e.g. `ó` U+00F3 standing in for `o`) survives them and its base
+ *  letter never surfaces. NFD *decomposes* it into base + combining mark; stripZeroWidth then removes the
+ *  `\p{M}` mark, leaving the bare base letter where the catalogue matches. Closes the decomposed/precomposed
+ *  evasion class. */
 export function secretProjections(text: string): string[] {
   const nfc = text.normalize('NFC');
   const nfkc = text.normalize('NFKC');
+  const nfd = text.normalize('NFD');
   const zw = stripZeroWidth(text);
   const skeleton = confusableSkeleton(text);
   const composed = confusableSkeleton(stripZeroWidth(nfc));
   const composedK = confusableSkeleton(stripZeroWidth(nfkc));
-  return [text, nfc, nfkc, zw, skeleton, composed, composedK];
+  const composedD = confusableSkeleton(stripZeroWidth(nfd)); // D4: NFD-first (decompose → strip marks → skeleton)
+  return [text, nfc, nfkc, nfd, zw, skeleton, composed, composedK, composedD];
 }
 
-/** True if ANY projection of `text` contains a catalogue secret (fail-closed). */
+// D4: bounded, LINEAR scanner for a credential-carrying URL (scheme://user:pass@host), replacing the
+// former greedy regex which was a proven O(n^2) ReDoS on benign long runs. Each `://` is located once via
+// indexOf (positions only advance ⇒ O(n) overall); the scheme is checked in a bounded backward window
+// (must contain a letter) and the userinfo `user:pass@` in a bounded forward window, so per-match work is
+// O(bound). Bounds are best-effort ceilings (documented in EVIDENCEPACK_V1.md §13).
+const URL_SCHEME_MAX = 40;    // realistic scheme-length ceiling (postgres, mongodb, amqps, https, …)
+const URL_USERINFO_MAX = 512; // realistic user:pass window ceiling
+function isSchemeChar(c: number): boolean {
+  return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x2b || c === 0x2e || c === 0x2d;
+}
+function isAlphaCode(c: number): boolean { return (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a); }
+function isWs(c: number): boolean { return c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d || c === 0x0c || c === 0x0b; }
+function isUserChar(c: number): boolean { return !isWs(c) && c !== 0x2f && c !== 0x3a && c !== 0x40; } // [^\s/:@]
+function isPassChar(c: number): boolean { return !isWs(c) && c !== 0x2f && c !== 0x40; }              // [^\s/@]
+export function scanUrlUserinfo(text: string): boolean {
+  let at = text.indexOf('://');
+  while (at !== -1) {
+    const lo = at - URL_SCHEME_MAX < 0 ? 0 : at - URL_SCHEME_MAX;
+    let s = at - 1, sawAlpha = false;
+    while (s >= lo && isSchemeChar(text.charCodeAt(s))) { if (isAlphaCode(text.charCodeAt(s))) sawAlpha = true; s--; }
+    if (sawAlpha) {
+      let i = at + 3;
+      const hi = i + URL_USERINFO_MAX > text.length ? text.length : i + URL_USERINFO_MAX;
+      const uStart = i;
+      while (i < hi && isUserChar(text.charCodeAt(i))) i++;
+      if (i > uStart && i < hi && text.charCodeAt(i) === 0x3a) {
+        i++;
+        const pStart = i;
+        while (i < hi && isPassChar(text.charCodeAt(i))) i++;
+        if (i > pStart && i < hi && text.charCodeAt(i) === 0x40) return true;
+      }
+    }
+    at = text.indexOf('://', at + 1);
+  }
+  return false;
+}
+
+/** True if ANY projection of `text` contains a catalogue secret (fail-closed). Runs both the regex catalogue
+ *  and the bounded linear url-userinfo scanner over every projection. */
 export function textHasSecret(text: string): boolean {
   for (const proj of secretProjections(text)) {
     if (scanForSecrets(proj).length > 0) return true;
+    if (scanUrlUserinfo(proj)) return true;
   }
   return false;
 }
