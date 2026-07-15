@@ -2,10 +2,21 @@
   "name": "aukora-fu",
   "version": "0.1.0",
   "private": true,
-  "description": "Aukora FU - Fusion Under-the-Hood: a local, advisory-only Fusion Council runner plus observer UI. Grants no authority.",
+  "description": "Aukora FU - Fusion Under-the-Hood: a hardened offline advisory council core. Grants no authority.",
   "scripts": {
-    "start": "bun run server.ts",
-    "council": "bun run run-council.ts",
-    "sample": "bun run run-council.ts --sample"
+    "core:verify": "npm run verify",
+    "legacy:observer": "bun run server.ts",
+    "legacy:council": "bun run run-council.ts",
+    "legacy:sample": "bun run run-council.ts --sample",
+    "test": "vitest run",
+    "test:core": "vitest run test/aukoraFuGlyph.test.ts test/aukoraFuCouncil.test.ts test/aukoraFuSpendLedger.test.ts test/boundaryGuard.test.ts test/legacyTargetSafety.test.ts test/legacySampleArtifact.test.ts test/evidencePackV1.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check:boundary": "node scripts/check-canonical-boundary.mjs",
+    "verify": "npm run check:boundary && npm run typecheck && npm run test:core"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3",
+    "vitest": "1.6.1"
   }
 }
