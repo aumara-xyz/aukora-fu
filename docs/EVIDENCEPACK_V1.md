@@ -209,7 +209,9 @@ Freeze-quality fixes found by the D4 exact-head audit (no P0/P1; correctness/cov
   length exactly **512 is detected**; **513 is the first miss**. 511/512/513 behaviour is pinned and documented.
 - **Deterministic linear JWT scanner replaces the capped regex.** D4's bounded `jwt` regex (`{10,4096}`
   payload) introduced an arbitrary > 4096-char false negative (large enterprise / `x5c` tokens). `scanJwt` is a
-  linear scan with **no length cap and no backtracking** (an O(n) dotless-run skip prevents O(n²) on `eyJ…`).
+  linear scan with **no length cap and no backtracking**: on every failed candidate the cursor advances PAST
+  the consumed seg-1 run (D6 — D5 advanced by only +1 when that run ended in a dot, a reachable O(n²) on
+  `'eyJ'×K + '.'`; deterministic dot-terminated regression vectors are pinned).
   It is listed in `SECRET_CATALOGUE.scanners` (`jwt-v1`) so `catalogueId` binds it. `> 4096` and large-`x5c`
   detection vectors are pinned.
 - **Deterministic step-budget replaces the flaky wall-clock ratio.** `scanStepBudget` counts exact character

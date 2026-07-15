@@ -404,12 +404,23 @@ describe('D4: url-userinfo bounded linear scanner + scaling regression', () => {
     // exact character steps of scanUrlUserinfo+scanJwt; the count is identical on every machine regardless of
     // scheduler load. Quadratic would grow ~4x per doubling; linear grows ~2x. Assert both the ratio AND an
     // absolute per-char ceiling. (Bounded catalogue REGEXES are pinned linear structurally via catalogueId.)
-    const steps = (unit: string, n: number) => scanStepBudget(unit.repeat(Math.ceil(n / unit.length)).slice(0, n));
-    for (const unit of ['a://', 'eyJ', 'API', '-----BEGIN ', 'SG.']) {
-      const s40 = steps(unit, 40000);
-      const s80 = steps(unit, 80000);
-      expect(s80).toBeLessThanOrEqual(2 * s40 + 8); // deterministically linear (≤ 2x + tiny constant)
-      expect(s80).toBeLessThanOrEqual(4 * 80000);   // absolute: a bounded number of steps per input char
+    // Adversarial inputs, each parameterized by n. Includes the D6 regression case `'eyJ'×K + '.'` — a
+    // maximal eyJ-dense seg-1 terminated by ONE dot, whose failed candidate previously advanced by only +1
+    // and re-scanned the run ⇒ O(n²). The dotless-only cases alone (D5) masked this; both are covered now.
+    const inputs: Array<[string, (n: number) => string]> = [
+      ['url ://', (n) => 'a://'.repeat(Math.ceil(n / 4)).slice(0, n)],
+      ['jwt eyJ (dotless)', (n) => 'eyJ'.repeat(Math.ceil(n / 3)).slice(0, n)],
+      ['jwt eyJ + trailing dot (D6 regression)', (n) => 'eyJ'.repeat(Math.ceil((n - 1) / 3)).slice(0, n - 1) + '.'],
+      ['jwt eyJ<10>. repeated', (n) => 'eyJ' + 'a'.repeat(10) + ('.eyJ' + 'a'.repeat(10)).repeat(Math.ceil(n / 17)).slice(0, n)],
+      ['env API', (n) => 'API'.repeat(Math.ceil(n / 3)).slice(0, n)],
+      ['pem BEGIN', (n) => '-----BEGIN '.repeat(Math.ceil(n / 11)).slice(0, n)],
+      ['sendgrid SG.', (n) => 'SG.'.repeat(Math.ceil(n / 3)).slice(0, n)],
+    ];
+    for (const [name, gen] of inputs) {
+      const s40 = scanStepBudget(gen(40000));
+      const s80 = scanStepBudget(gen(80000));
+      expect(s80, name).toBeLessThanOrEqual(2 * s40 + 8); // deterministically linear (≤ 2x + tiny constant)
+      expect(s80, name).toBeLessThanOrEqual(4 * 80000);   // absolute: bounded steps per input char
     }
     // A generous, NON-NORMATIVE wall-clock smoke (correctness must not depend on it; huge ceiling).
     const t0 = performance.now(); textHasSecret('eyJ'.repeat(60000)); const ms = performance.now() - t0;
@@ -554,5 +565,20 @@ describe('D5: linear JWT scanner (no 4096 cap, no backtracking)', () => {
   it('the jwt scanner is O(n) on adversarial eyJ… (no backtracking)', () => {
     const s = (n: number) => scanStepBudget('eyJ'.repeat(Math.ceil(n / 3)).slice(0, n));
     expect(s(80000)).toBeLessThanOrEqual(2 * s(40000) + 8); // deterministic linear
+  });
+  it('D6 REGRESSION: dot-terminated eyJ run is O(n), not O(n^2)', () => {
+    // `'eyJ'×K + '.'` — a maximal eyJ-dense seg-1 ending in ONE dot whose later segments fail. Before D6 the
+    // failed candidate advanced by +1 and re-scanned the run for each of ~n/3 starts ⇒ O(n²) (textHasSecret
+    // took ~57s at 60KB). scanStepBudget is a deterministic proof: the step count must grow ~2x per doubling.
+    const dotEyJ = (n: number) => 'eyJ'.repeat(Math.ceil((n - 1) / 3)).slice(0, n - 1) + '.';
+    const s40 = scanStepBudget(dotEyJ(40000));
+    const s80 = scanStepBudget(dotEyJ(80000));
+    const s160 = scanStepBudget(dotEyJ(160000));
+    expect(s80).toBeLessThanOrEqual(2 * s40 + 8);   // linear (was ~4x = quadratic before D6)
+    expect(s160).toBeLessThanOrEqual(2 * s80 + 8);
+    expect(scanJwt(dotEyJ(40000))).toBe(false);     // correctness: not a JWT (never short-circuits)
+    // reachable via the public secret-scan entrypoint — must complete fast (was minutes).
+    const t0 = performance.now(); textHasSecret(dotEyJ(120000)); const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(10000);                  // 120KB dot-terminated blob well under 10s (non-normative)
   });
 });

@@ -173,10 +173,11 @@ export function scanUrlUserinfo(text: string): boolean {
 }
 
 // LINEAR scanner for a JWT (eyJ<b64url>{≥10}.<b64url>{≥10}.<b64url>{≥6}), replacing the D4 capped regex.
-// No length cap (detects large/enterprise/x5c tokens the capped regex missed) and NO backtracking. Each `eyJ`
-// is located once; each b64url run is consumed forward exactly once. O(n) guard: when a seg-1 run is NOT
-// terminated by `.`, the whole run is dotless so no `eyJ` inside it can complete seg-1 — skip past the run
-// (prevents O(n^2) on `eyJeyJeyJ…`). `charCodeAt` past end returns NaN, so every predicate is false at EOF.
+// No length cap (detects large/enterprise/x5c tokens the capped regex missed) and NO backtracking. Each
+// seg-1 b64url run is consumed forward exactly once; on a FAILED candidate the cursor jumps PAST that run
+// (to `i`), so the runs never overlap and total work is O(n) — no interior `eyJ` in a maximal b64url run can
+// succeed where the earliest candidate failed (shared terminating char ⇒ shared seg-2/seg-3). This closes
+// the D5 O(n²) case on `'eyJ'×K + '.'`. `charCodeAt` past end returns NaN, so every predicate is false at EOF.
 export function scanJwt(text: string): boolean {
   let at = text.indexOf('eyJ');
   while (at !== -1) {
@@ -192,8 +193,11 @@ export function scanJwt(text: string): boolean {
         if (n3 >= 6) return true;
       }
     }
-    // If seg-1 was dotless, skip to the end of the run (all interior `eyJ` fail identically) — keeps it O(n).
-    at = dot1 ? text.indexOf('eyJ', at + 1) : text.indexOf('eyJ', i);
+    // On EVERY failed candidate, advance past the already-consumed seg-1 b64url run (to `i`, which is > at).
+    // A later `eyJ` inside that same maximal run shares its terminating char and therefore its seg-2/seg-3,
+    // so it cannot succeed where the earliest candidate failed — re-scanning it would be O(n²) (D6 fix: this
+    // was previously `at+1` when the run ended in a dot, the reachable quadratic case on `'eyJ'×K + '.'`).
+    at = text.indexOf('eyJ', i);
   }
   return false;
 }
