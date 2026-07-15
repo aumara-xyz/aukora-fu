@@ -1,85 +1,120 @@
-# Aukora FU — Fusion Under-the-Hood
+# Aukora Fu — Fusion Under-the-Hood
 
-**FU = Fusion / Fusion Under-the-Hood.** This private repository is becoming the canonical home of
-Aukora's advisory multi-model council. The hardened offline core now lives in `src/`; the original
-standalone shard runner and browser observer remain available as explicitly legacy surfaces while the
-canonical EvidencePack, transport, observer, and CLI layers are built in reviewed commits.
+**A deterministic, authority-free evidence and council layer for governed AI systems.**
 
-## What it is (and is not)
-- ✅ Hardened advisory council core with offline tests: `npm run verify`.
-- ⚠️ Legacy local shard runner: `bun run legacy:council` (disabled unless explicitly opted in).
-- ✅ Legacy browser observer: `bun run legacy:observer` then open `http://127.0.0.1:9900`.
-- ✅ Legacy synthetic sample with no API key or provider contact: `bun run legacy:sample`.
-- ✅ Loopback-only UI (`127.0.0.1:9900`). No microphone, no camera.
-- ✅ **Read-only server**: writes nothing, deletes nothing, runs no tool; guards path traversal to `runs/`.
-- ❌ NOT a kernel organ. It does **not** live in `core/src` and imports **nothing** from the kernel.
-- ❌ It never signs, unlocks, promotes, authorizes, writes memory, or affects a gate verdict.
+Aukora Fu turns bounded engineering evidence into inspectable advisory analysis. It is deliberately separated from the Aukora Kernel: Fu may review, disagree, and produce evidence, but it cannot sign, authorize, unlock, apply, or mutate a protected system.
 
-The governance boundary is non-negotiable: FU can review and visualize. It cannot authorize. The
-canonical core is being extracted here once from the provenance-pinned Symbiote donor. After a reviewed
-Fu release exists, Symbiote will consume that pinned release instead of maintaining a second copy.
+> **Status: VERIFIED ENGINEERING / research release.** The offline core and EvidencePack v1 are implemented and tested. This is not a production security product, a live autonomous council, or an authority system.
 
-## Canonical save-point status
+## The boundary
 
-- Canonical now: council orchestration, glyph parsing/perception, quorum, phase-lock analysis, neutral
-  replay, reserve/reconcile spend meter, append-only spend ledger, and offline conformance tests.
-- Still legacy: `run-council.ts`, its raw folder scraper, `fusion-run-v1`, and the current dashboard flow.
-- Not built yet: EvidencePackV1, hardened OpenRouter/Fugu observers, canonical CLI, public package, and
-  Symbiote adapter.
-- Provenance: [`docs/provenance/SYMBIOTE_EXTRACTION_2026-07-14.md`](docs/provenance/SYMBIOTE_EXTRACTION_2026-07-14.md).
+```text
+untrusted files / test evidence
+              │
+              ▼
+       EvidencePack v1
+ canonical bytes · digest binding
+ secret-shape refusal · hostile-input checks
+              │
+              ▼
+        Aukora Fu council
+ quorum · dissent · phase-lock analysis
+              │
+              ▼
+        advisory artifact only
+ advisoryOnly: true · grantsAuthority: false
+              │
+              ╳
+      no signing / no apply / no authority
+```
 
-## Quick Start
+Those two literal invariants are validator-enforced. An artifact that claims otherwise is invalid.
 
-1. Install Bun:
+## What is implemented
 
-       https://bun.sh
+- Hardened offline council orchestration with eight canonical seats.
+- Glyph parsing, stance/confidence vectors, quorum, divergence, and phase-lock checks.
+- Fail-closed spend accounting for any future observer transport.
+- An AST boundary guard excluding network, authority, custody, Kernel, Convex, Symbiote memory, subprocess, and live-apply capabilities. Filesystem access is forbidden except for the explicitly allowlisted, controller-owned spend-ledger adapter.
+- EvidencePack v1 with:
+  - closed schemas and fail-closed validation;
+  - canonical JSON and domain-separated SHA-256 digests;
+  - snapshot-first sealing and verification;
+  - array-descriptor and prototype hardening;
+  - Unicode-aware secret projections;
+  - structurally bounded regex patterns and hand-written linear secret-shape scanners;
+  - known-answer vectors reproduced by TypeScript and a Python reference.
+- **146 tests** at the accepted D6 head.
 
-2. Install and verify the hardened offline core:
+The full wire contract, limits, and KATs are in [docs/EVIDENCEPACK_V1.md](docs/EVIDENCEPACK_V1.md).
 
-       bun install --frozen-lockfile
-       bun run core:verify
+## Verify from a clean checkout
 
-3. Start the legacy browser observer:
+Requirements: Bun 1.3.x, Node.js 20+ and Python 3.
 
-       bun run legacy:observer
+```bash
+bun install --frozen-lockfile --ignore-scripts
+npm run verify
+python3 scripts/pyref/evidence_canonical_ref.py
+```
 
-4. Open:
+The verification gate checks the capability boundary, TypeScript, and the complete offline test suite. It makes no provider call and requires no API key.
 
-       http://127.0.0.1:9900
+## Repository map
 
-5. In a second terminal, prove the legacy runner writes a clearly marked synthetic sample. Synthetic
-   cells are non-votes, contact no provider, establish no quorum, and are not canonical evidence:
+```text
+src/
+  evidence/                 pure EvidencePack contract and implementation
+  aukoraFuCouncil.ts        offline advisory council
+  aukoraFuGlyph.ts          glyph and coherence primitives
+  aukoraFuSpendLedger.ts    fail-closed filesystem accounting adapter
+test/                       positive and hostile conformance tests
+scripts/pyref/              independent canonicalization/KAT reference
+legacy/                     retained legacy safety helpers
+dashboard.html              legacy read-only observer
+run-council.ts              legacy opt-in provider runner
+```
 
-       bun run legacy:sample
+## Legacy observer and runner
 
-6. The legacy paid runner is retained for compatibility, but there are deliberately no primary
-   `start`, `sample`, or `council` aliases. It requires both an explicit target and an explicit unsafe
-   opt-in, and refuses targets containing secret-shaped filenames or symlinks. Do not use it until
-   observer accounting and EvidencePackV1 land.
+The browser observer remains loopback-only and read-only:
 
-The page refreshes when a new run lands. Generated `runs/*.json` are local output and are gitignored.
+```bash
+bun run legacy:observer
+# open http://127.0.0.1:9900
+```
 
-## Review Another Folder
+A deterministic synthetic sample contacts no provider:
 
-The following command belongs to the legacy raw-folder runner. It is not the future EvidencePackV1
-interface. It remains disabled by default and must not be used on secrets or private material:
+```bash
+bun run legacy:sample
+```
 
-    AUKORA_ALLOW_LEGACY_PAID_RUN=1 \
-    FUSION_TARGET=/absolute/path/to/project \
-    COUNCIL_BUDGET=10 \
-    bun run legacy:council
+The retained paid runner is **legacy, disabled by default, and not part of the canonical EvidencePack path**. It requires an explicit target and opt-in:
 
-Useful knobs:
+```bash
+AUKORA_ALLOW_LEGACY_PAID_RUN=1 \
+FUSION_TARGET=/absolute/path/to/project \
+COUNCIL_BUDGET=10 \
+bun run legacy:council
+```
 
-    COUNCIL_BUDGET=10          # max model calls
-    COUNCIL_CONCURRENCY=3      # max simultaneous calls, clamped 1..8
-    FUSION_MODELS=a,b,c        # comma-separated OpenRouter model slugs
+Never point the legacy runner at secrets or private material. Generated `runs/*.json` are local output and gitignored.
 
-Endpoints (all read-only): `/api/runs`, `/api/run/latest`, `/api/run/:id`, and SSE `/api/stream`
-(live-refresh when a new run lands).
+## What Fu does not claim
 
-## Private Lab Warning
+Fu does not prove that evidence is true, detect every possible secret, provide constant-time behavior, resist a compromised host, reach global consensus, or authorize an effect. It contains no signing key custody, filesystem apply, production transport, or autonomous self-modification path. Read [CLAIMS.md](CLAIMS.md) and [LIMITATIONS.md](LIMITATIONS.md) before relying on it.
 
-This is private early tech. Do not publish without a release/legal/provenance review. Do not commit
-`.env` or generated `runs/*.json`. No license, visibility, release, or trademark decision is implied by
-the canonical-core extraction.
+## Package status
+
+The GitHub repository is public and licensed under AGPL-3.0-or-later. `"private": true` in `package.json` is intentional: it blocks accidental npm publication while the package/export surface is not frozen. It does **not** mean the GitHub repository is private.
+
+## Security and contributions
+
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md) and require DCO sign-off.
+- Do not commit credentials, generated council runs, private source captures, model weights, or absolute personal paths. Weight manifests/checksums/licenses may be reviewed separately; model weights do not belong in this repository by default.
+
+## License
+
+Copyright © 2026 Aukora. Licensed under [AGPL-3.0-or-later](LICENSE). Third-party components retain their own licenses; see [NOTICE](NOTICE).

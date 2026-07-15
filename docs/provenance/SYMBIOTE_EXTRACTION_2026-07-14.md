@@ -1,8 +1,13 @@
 # Aukora Fu canonical-core extraction — 2026-07-14
 
-This private save point records the one-time extraction of the hardened advisory council from Aukora
-Symbiote into the existing `aumara-xyz/aukora-fu` repository. It does not change repository visibility,
-licensing, authority semantics, or release status.
+> **HISTORICAL PROVENANCE RECORD — SUPERSEDED FOR CURRENT STATUS.** This page records the state of the
+> initial 2026-07-14 extraction. The repository is now public and AGPL-3.0-or-later licensed, and
+> EvidencePack v1 is implemented at accepted D6. See [README.md](../../README.md), [CLAIMS.md](../../CLAIMS.md),
+> and [LIMITATIONS.md](../../LIMITATIONS.md). The source pins and byte hashes below remain provenance evidence.
+
+This save point recorded the one-time extraction of the hardened advisory council from Aukora
+Symbiote into the existing `aumara-xyz/aukora-fu` repository. At that historical point it did not
+change repository visibility, licensing, authority semantics, or release status.
 
 ## Source pins
 
@@ -50,5 +55,6 @@ no credentials or authority material.
 
 All council outputs are advisory evidence. They are pinned `advisoryOnly: true` and
 `grantsAuthority: false`. Aukora Fu cannot sign, authorize, apply, write memory, or mutate a reviewed
-repository. EvidencePackV1, hardened observers, the canonical CLI, and Symbiote package consumption are
-future reviewed commits, not part of this extraction.
+repository. **Historical statement:** EvidencePackV1, hardened observers, the canonical CLI, and
+Symbiote package consumption were future work at this extraction point. EvidencePack v1 subsequently
+landed; current implementation status is maintained in the top-level documents linked above.
