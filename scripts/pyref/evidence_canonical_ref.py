@@ -31,7 +31,6 @@ SECRET_CATALOGUE = {
         {"id": "openai-key", "pattern": "sk-[A-Za-z0-9]{20,}", "flags": "g"},
         {"id": "aws-access-key-id", "pattern": "AKIA[0-9A-Z]{16}", "flags": "g"},
         {"id": "pem-private-key", "pattern": "-----BEGIN [A-Z ]{0,64}PRIVATE KEY-----", "flags": "g"},
-        {"id": "jwt", "pattern": "eyJ[A-Za-z0-9_\\-]{10,256}\\.[A-Za-z0-9_\\-]{10,4096}\\.[A-Za-z0-9_\\-]{6,512}", "flags": "g"},
         {"id": "env-secret-assign", "pattern": "(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]{0,64}\\s*=\\s*\\S{8,4096}", "flags": "gi"},
         {"id": "github-token", "pattern": "(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}", "flags": "g"},
         {"id": "slack-token", "pattern": "xox[baprs]-[A-Za-z0-9-]{10,}", "flags": "g"},
@@ -46,7 +45,7 @@ SECRET_CATALOGUE = {
     # D4: url-userinfo moved to the bounded linear scanUrlUserinfo (was an O(n^2) ReDoS regex). Listed here
     # so catalogueId binds it. The Python oracle only reproduces catalogueId/digests, not detection, so it
     # simply mirrors this field.
-    "scanners": ["url-userinfo-v1"],
+    "scanners": ["url-userinfo-v1", "jwt-v1"],
     "confusables": {
         "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x",
         "ѕ": "s", "і": "i", "ј": "j", "һ": "h", "ԁ": "d", "ԛ": "q",
@@ -92,9 +91,9 @@ def maximal_body():
 if __name__ == '__main__':
     import sys
     KAT = {
-        "CATALOGUE_ID": "39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944",
-        "MIN_DIGEST": "7cc6359cd271579607f324d5567fba12858f7c3378ea3c9df3b091dd1defec9a",
-        "MAX_DIGEST": "613beff622edbc98f1b8105b15d14f281cb594059eb3819561b37323a76f4601",
+        "CATALOGUE_ID": "1504a1587d9464712076f331fda35327f4ba14fa9d9a260d1ac0285aade07aa7",
+        "MIN_DIGEST": "84e9b48d33e007101157f42dac7b0d05befb8a88f8812384ef95485fced862d2",
+        "MAX_DIGEST": "03cf93eb0f97d3fde24963aa409e272ef1d8cafcceb46e534412fa32a63112e1",
         "FENCE": "3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28",
     }
     got = {

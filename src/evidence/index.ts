@@ -8,7 +8,7 @@ export * from './types';
 export { canonicalString, canonicalBytes, verifyCanonicalWire } from './canonical';
 export { packDigest, packDigestOfCanonical, sha256Hex, uint64BE, DIGEST_DOMAIN } from './digest';
 export { deriveFenceNonce, fence, fenceOpen, fenceClose, fenceCollisionFree, FENCE_DOMAIN } from './framing';
-export { SECRET_CATALOGUE, catalogueId, scanForSecrets, secretProjections, textHasSecret, scanUrlUserinfo } from './catalogue';
+export { SECRET_CATALOGUE, catalogueId, scanForSecrets, secretProjections, textHasSecret, scanUrlUserinfo, scanJwt, scanStepBudget } from './catalogue';
 export { validatePackBody, validateEnvelope, AUTHORITY_KEY_RE, testIdentity } from './validate';
 
 import { EvidencePackV1, EvidencePackEnvelopeV1 } from './types';
@@ -51,8 +51,15 @@ export function sealEnvelope(body: EvidencePackV1): EvidencePackEnvelopeV1 {
  * behaviour-preserving for them; it only removes the live-accessor split.
  */
 export function verifyEnvelope(env: EvidencePackEnvelopeV1): boolean {
-  const snap = JSON.parse(canonicalString(env)) as EvidencePackEnvelopeV1;
-  return validateEnvelope(snap).ok;
+  // D5 (item 1): a TOTAL boolean predicate on hostile inert input — canonicalization (e.g. -0, lone
+  // surrogate, unsafe integer), validation, or digest errors return false, never throw. The snapshot-first
+  // read is inside the try so a throwing canonicalString/JSON.parse can never escape.
+  try {
+    const snap = JSON.parse(canonicalString(env)) as EvidencePackEnvelopeV1;
+    return validateEnvelope(snap).ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -34,7 +34,6 @@ export const SECRET_CATALOGUE: SecretCatalogueV1 = {
     { id: 'openai-key', pattern: 'sk-[A-Za-z0-9]{20,}', flags: 'g' },
     { id: 'aws-access-key-id', pattern: 'AKIA[0-9A-Z]{16}', flags: 'g' },
     { id: 'pem-private-key', pattern: '-----BEGIN [A-Z ]{0,64}PRIVATE KEY-----', flags: 'g' },
-    { id: 'jwt', pattern: 'eyJ[A-Za-z0-9_\\-]{10,256}\\.[A-Za-z0-9_\\-]{10,4096}\\.[A-Za-z0-9_\\-]{6,512}', flags: 'g' },
     { id: 'env-secret-assign', pattern: '(?:API|SECRET|TOKEN|PASSWORD|PRIVATE)[A-Z0-9_]{0,64}\\s*=\\s*\\S{8,4096}', flags: 'gi' },
     { id: 'github-token', pattern: '(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}', flags: 'g' },
     { id: 'slack-token', pattern: 'xox[baprs]-[A-Za-z0-9-]{10,}', flags: 'g' },
@@ -46,12 +45,13 @@ export const SECRET_CATALOGUE: SecretCatalogueV1 = {
     { id: 'sendgrid-key', pattern: 'SG\\.[A-Za-z0-9_\\-]{16,512}\\.[A-Za-z0-9_\\-]{16,}', flags: 'g' },
     { id: 'azure-account-key', pattern: 'AccountKey=[A-Za-z0-9+/]{40,}={0,2}', flags: 'g' },
   ],
-  // url-userinfo (scheme://user:pass@host — the most common real leak: postgres/mysql/mongodb/redis/amqp/
-  // https connection strings) is handled by the bounded linear scanUrlUserinfo, NOT a regex. Its former
-  // greedy regex `[a-z][a-z0-9+.-]*://...` was a proven O(n^2) ReDoS: the scheme class matched long benign
-  // lowercase runs then backtracked for `://` at every start position. The scanner is O(n) and still
-  // shape-based, so it never false-positives on legitimate high-entropy file evidence.
-  scanners: ['url-userinfo-v1'],
+  // Named bounded/linear scanners (NOT regexes), listed here so catalogueId binds them too.
+  //  - url-userinfo-v1 (scheme://user:pass@host connection-string leaks): its former greedy regex was a
+  //    proven O(n^2) ReDoS; scanUrlUserinfo is O(n) and shape-based.
+  //  - jwt-v1: D5 replaces the capped jwt regex with the deterministic linear scanJwt. The D4 regex had to
+  //    bound its payload quantifier ({10,4096}) to avoid O(n^2) backtracking, which introduced an arbitrary
+  //    ~4096-char false-negative (large enterprise / x5c JWTs). scanJwt has NO length cap and NO backtracking.
+  scanners: ['url-userinfo-v1', 'jwt-v1'],
   // Cyrillic/Greek homoglyphs → ASCII skeleton (extend deliberately; each change re-derives catalogueId).
   confusables: {
     'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x',
@@ -124,13 +124,11 @@ export function secretProjections(text: string): string[] {
   return [text, nfc, nfkc, nfd, zw, skeleton, composed, composedK, composedD];
 }
 
-// D4: bounded, LINEAR scanner for a credential-carrying URL (scheme://user:pass@host), replacing the
-// former greedy regex which was a proven O(n^2) ReDoS on benign long runs. Each `://` is located once via
-// indexOf (positions only advance ⇒ O(n) overall); the scheme is checked in a bounded backward window
-// (must contain a letter) and the userinfo `user:pass@` in a bounded forward window, so per-match work is
-// O(bound). Bounds are best-effort ceilings (documented in EVIDENCEPACK_V1.md §13).
-const URL_SCHEME_MAX = 40;    // realistic scheme-length ceiling (postgres, mongodb, amqps, https, …)
-const URL_USERINFO_MAX = 512; // realistic user:pass window ceiling
+// Deterministic operation counter for the hand-written linear scanners. It lets the test suite assert an
+// O(n) STEP budget (load-independent) instead of a flaky wall-clock ratio (D5 item 4). Pure integer state,
+// no I/O; read/reset only via scanStepBudget() below.
+let SCAN_STEPS = 0;
+
 function isSchemeChar(c: number): boolean {
   return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x2b || c === 0x2e || c === 0x2d;
 }
@@ -138,22 +136,35 @@ function isAlphaCode(c: number): boolean { return (c >= 0x41 && c <= 0x5a) || (c
 function isWs(c: number): boolean { return c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d || c === 0x0c || c === 0x0b; }
 function isUserChar(c: number): boolean { return !isWs(c) && c !== 0x2f && c !== 0x3a && c !== 0x40; } // [^\s/:@]
 function isPassChar(c: number): boolean { return !isWs(c) && c !== 0x2f && c !== 0x40; }              // [^\s/@]
+// base64url alphabet [A-Za-z0-9_-] (the JWT segment charset; 'eyJ' is itself base64url).
+function isB64Url(c: number): boolean {
+  return (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f || c === 0x2d;
+}
+
+// LINEAR scanner for a credential-carrying URL (scheme://user:pass@host), replacing the former greedy regex
+// (a proven O(n^2) ReDoS). Each `://` is located once via indexOf (positions only advance ⇒ O(n) overall);
+// the scheme is checked in a bounded backward window (must contain a letter). D5 (item 2) pins the userinfo
+// boundary: the `@` may sit at index uStart+URL_USERINFO_MAX inclusive, so a userinfo (user:pass) of length
+// exactly 512 IS detected; 513 is the first miss (best-effort ceiling, §13). The scheme window is a length
+// bound only (out-of-window still linear); the userinfo bound is a documented detection ceiling.
+const URL_SCHEME_MAX = 40;    // realistic scheme-length ceiling (postgres, mongodb, amqps, https, …)
+const URL_USERINFO_MAX = 512; // realistic user:pass window ceiling; userinfo length ≤ 512 is detected
 export function scanUrlUserinfo(text: string): boolean {
   let at = text.indexOf('://');
   while (at !== -1) {
     const lo = at - URL_SCHEME_MAX < 0 ? 0 : at - URL_SCHEME_MAX;
     let s = at - 1, sawAlpha = false;
-    while (s >= lo && isSchemeChar(text.charCodeAt(s))) { if (isAlphaCode(text.charCodeAt(s))) sawAlpha = true; s--; }
+    while (s >= lo && isSchemeChar(text.charCodeAt(s))) { SCAN_STEPS++; if (isAlphaCode(text.charCodeAt(s))) sawAlpha = true; s--; }
     if (sawAlpha) {
-      let i = at + 3;
-      const hi = i + URL_USERINFO_MAX > text.length ? text.length : i + URL_USERINFO_MAX;
-      const uStart = i;
-      while (i < hi && isUserChar(text.charCodeAt(i))) i++;
-      if (i > uStart && i < hi && text.charCodeAt(i) === 0x3a) {
+      const uStart = at + 3;
+      const maxAt = uStart + URL_USERINFO_MAX; // '@' allowed at index ≤ maxAt ⇒ userinfo length ≤ 512
+      let i = uStart;
+      while (i < maxAt && isUserChar(text.charCodeAt(i))) { SCAN_STEPS++; i++; }
+      if (i > uStart && i < maxAt && text.charCodeAt(i) === 0x3a) {
         i++;
         const pStart = i;
-        while (i < hi && isPassChar(text.charCodeAt(i))) i++;
-        if (i > pStart && i < hi && text.charCodeAt(i) === 0x40) return true;
+        while (i < maxAt && isPassChar(text.charCodeAt(i))) { SCAN_STEPS++; i++; }
+        if (i > pStart && i <= maxAt && text.charCodeAt(i) === 0x40) return true;
       }
     }
     at = text.indexOf('://', at + 1);
@@ -161,12 +172,48 @@ export function scanUrlUserinfo(text: string): boolean {
   return false;
 }
 
-/** True if ANY projection of `text` contains a catalogue secret (fail-closed). Runs both the regex catalogue
- *  and the bounded linear url-userinfo scanner over every projection. */
+// LINEAR scanner for a JWT (eyJ<b64url>{≥10}.<b64url>{≥10}.<b64url>{≥6}), replacing the D4 capped regex.
+// No length cap (detects large/enterprise/x5c tokens the capped regex missed) and NO backtracking. Each `eyJ`
+// is located once; each b64url run is consumed forward exactly once. O(n) guard: when a seg-1 run is NOT
+// terminated by `.`, the whole run is dotless so no `eyJ` inside it can complete seg-1 — skip past the run
+// (prevents O(n^2) on `eyJeyJeyJ…`). `charCodeAt` past end returns NaN, so every predicate is false at EOF.
+export function scanJwt(text: string): boolean {
+  let at = text.indexOf('eyJ');
+  while (at !== -1) {
+    let i = at + 3;
+    while (isB64Url(text.charCodeAt(i))) { SCAN_STEPS++; i++; }        // seg-1 b64url run (incl. 'eyJ')
+    const dot1 = text.charCodeAt(i) === 0x2e;
+    if ((i - at) >= 13 && dot1) {                                     // 'eyJ' + ≥10 b64url, then '.'
+      let j = i + 1, n2 = 0;
+      while (isB64Url(text.charCodeAt(j))) { SCAN_STEPS++; j++; n2++; }
+      if (n2 >= 10 && text.charCodeAt(j) === 0x2e) {
+        let k = j + 1, n3 = 0;
+        while (isB64Url(text.charCodeAt(k))) { SCAN_STEPS++; k++; n3++; }
+        if (n3 >= 6) return true;
+      }
+    }
+    // If seg-1 was dotless, skip to the end of the run (all interior `eyJ` fail identically) — keeps it O(n).
+    at = dot1 ? text.indexOf('eyJ', at + 1) : text.indexOf('eyJ', i);
+  }
+  return false;
+}
+
+/** Test-only: run both hand-written scanners and return the exact number of character steps taken — a
+ *  deterministic, load-independent complexity budget (D5 item 4 replaces the flaky wall-clock ratio). */
+export function scanStepBudget(text: string): number {
+  SCAN_STEPS = 0;
+  scanUrlUserinfo(text);
+  scanJwt(text);
+  return SCAN_STEPS;
+}
+
+/** True if ANY projection of `text` contains a catalogue secret (fail-closed). Runs the regex catalogue and
+ *  the linear url-userinfo + jwt scanners over every projection. */
 export function textHasSecret(text: string): boolean {
   for (const proj of secretProjections(text)) {
     if (scanForSecrets(proj).length > 0) return true;
     if (scanUrlUserinfo(proj)) return true;
+    if (scanJwt(proj)) return true;
   }
   return false;
 }

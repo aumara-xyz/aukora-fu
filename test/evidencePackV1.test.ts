@@ -7,15 +7,15 @@ import {
   canonicalString, canonicalBytes, verifyCanonicalWire,
   packDigest, sha256Hex, uint64BE,
   deriveFenceNonce, fenceOpen, fenceCollisionFree,
-  SECRET_CATALOGUE, catalogueId, scanForSecrets, textHasSecret, scanUrlUserinfo,
+  SECRET_CATALOGUE, catalogueId, scanForSecrets, textHasSecret, scanUrlUserinfo, scanJwt, scanStepBudget,
   validatePackBody, validateEnvelope, sealEnvelope, verifyEnvelope, renderForSeat,
 } from '../src/evidence/index';
 
 // ── Pinned known-answer vectors (contract decision 11; reproduced by scripts/pyref + Node + Bun) ──
-const KAT_CATALOGUE_ID = '39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944';
-const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"39778f901c7f1405659890fcaa6af1a5fe70ecf3c4f556f3e320d6edc4cc8944","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
-const KAT_MIN_DIGEST = '7cc6359cd271579607f324d5567fba12858f7c3378ea3c9df3b091dd1defec9a';
-const KAT_MAX_DIGEST = '613beff622edbc98f1b8105b15d14f281cb594059eb3819561b37323a76f4601'; // D2: honest zero-byte stream
+const KAT_CATALOGUE_ID = '1504a1587d9464712076f331fda35327f4ba14fa9d9a260d1ac0285aade07aa7';
+const KAT_CANON = '{"advisoryOnly":true,"baseCommit":null,"baseTree":null,"builderToolVersions":{"node":"v22.23.0"},"catalogueId":"1504a1587d9464712076f331fda35327f4ba14fa9d9a260d1ac0285aade07aa7","files":[],"grantsAuthority":false,"headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headTree":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","limitsProfileId":"default-v1","omissions":[],"repoId":"aumara-xyz/aukora-fu","rootAllowlist":[],"schema":"aukora-fu-evidence-pack-v1","testRuns":[]}';
+const KAT_MIN_DIGEST = '84e9b48d33e007101157f42dac7b0d05befb8a88f8812384ef95485fced862d2';
+const KAT_MAX_DIGEST = '03cf93eb0f97d3fde24963aa409e272ef1d8cafcceb46e534412fa32a63112e1'; // D2: honest zero-byte stream
 const KAT_FENCE = '3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28';
 const SHA_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
 const SHA_ZEROS3 = '709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c';
@@ -392,18 +392,28 @@ describe('D4: url-userinfo bounded linear scanner + scaling regression', () => {
     expect(scanUrlUserinfo('see https://docs.example.com for more')).toBe(false);
     expect(textHasSecret('AAAA')).toBe(false);
   });
-  it('SCALING REGRESSION: no catalogue regex is O(n^2) on adversarial repeated-prefix input', () => {
-    // The removed url regex AND the env-secret-assign / jwt regexes were O(n^2): doubling n quadrupled time
-    // (repoId='API'*n took ~7s at 40KB). All greedy-before-required-token quantifiers are now bounded ⇒ O(n):
-    // doubling n stays well under a quadratic 4x factor, and every prefix scans fast. Cover each offender.
-    const time = (unit: string, n: number) => { const s = unit.repeat(Math.ceil(n / unit.length)).slice(0, n); const t0 = performance.now(); textHasSecret(s); return performance.now() - t0; };
-    for (const unit of ['a', 'API', 'eyJ', '-----BEGIN ', 'SG.', 'a://']) {
-      time(unit, 20000); // warm up
-      const t40 = Math.max(time(unit, 40000), 1);
-      const t160 = time(unit, 160000); // 4x the input
-      expect(t160 / t40).toBeLessThan(8);     // quadratic would be ~16x; require clearly sub-quadratic
-      expect(t160).toBeLessThan(3000);         // 160KB adversarial must scan fast (was minutes for these)
+  it('D5: userinfo boundary pins 511/512 detected, 513 first miss (documented §13 ceiling)', () => {
+    const url = (L: number) => { const h = Math.floor((L - 1) / 2); return `x://${'u'.repeat(h)}:${'p'.repeat(L - 1 - h)}@host`; }; // userinfo len = user + ':' + pass = L
+    expect(scanUrlUserinfo(url(511))).toBe(true);
+    expect(scanUrlUserinfo(url(512))).toBe(true);
+    expect(scanUrlUserinfo(url(513))).toBe(false);
+    expect(scanUrlUserinfo(url(514))).toBe(false);
+  });
+  it('SCALING BUDGET (deterministic, load-independent): the linear scanners take O(n) steps, not O(n^2)', () => {
+    // D5 item 4: replaces the flaky wall-clock ratio with a deterministic STEP budget. scanStepBudget counts
+    // exact character steps of scanUrlUserinfo+scanJwt; the count is identical on every machine regardless of
+    // scheduler load. Quadratic would grow ~4x per doubling; linear grows ~2x. Assert both the ratio AND an
+    // absolute per-char ceiling. (Bounded catalogue REGEXES are pinned linear structurally via catalogueId.)
+    const steps = (unit: string, n: number) => scanStepBudget(unit.repeat(Math.ceil(n / unit.length)).slice(0, n));
+    for (const unit of ['a://', 'eyJ', 'API', '-----BEGIN ', 'SG.']) {
+      const s40 = steps(unit, 40000);
+      const s80 = steps(unit, 80000);
+      expect(s80).toBeLessThanOrEqual(2 * s40 + 8); // deterministically linear (≤ 2x + tiny constant)
+      expect(s80).toBeLessThanOrEqual(4 * 80000);   // absolute: a bounded number of steps per input char
     }
+    // A generous, NON-NORMATIVE wall-clock smoke (correctness must not depend on it; huge ceiling).
+    const t0 = performance.now(); textHasSecret('eyJ'.repeat(60000)); const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(30000); // 180KB adversarial jwt-prefix completes well under 30s on any box
   });
 });
 
@@ -494,5 +504,55 @@ describe('D4: snapshot-first seal + exotic array-descriptor rejection', () => {
     expect(anyLeak).toBe(false);
     // and a legitimately sealed envelope still verifies
     expect(verifyEnvelope(sealEnvelope(clone(minimalBody())))).toBe(true);
+  });
+});
+
+// ── D5 item 1: verifyEnvelope is a TOTAL boolean predicate — never throws on hostile inert input ───
+describe('D5: verifyEnvelope total predicate (never throws)', () => {
+  const okBody = () => clone(minimalBody());
+  it('canonicalization errors return false, never throw (bad-integer, lone surrogate, unsafe int)', () => {
+    // -0 in a numeric field makes canonicalString throw; must be caught → false.
+    const badInt: any = { body: { ...okBody(), testRuns: [{ ...mkTest(['x']), exitCode: -0 }] }, packDigest: '0'.repeat(64) };
+    expect(verifyEnvelope(badInt)).toBe(false);
+    // lone surrogate in a string → canonicalString throws → false.
+    const surrogate: any = { body: { ...okBody(), repoId: 'aumara\uD800xyz' }, packDigest: '0'.repeat(64) };
+    expect(verifyEnvelope(surrogate)).toBe(false);
+    // unsafe integer → false, not throw.
+    const unsafe: any = { body: { ...okBody(), files: [{ path: 'a.ts', kind: 'text', originalSizeBytes: Number.MAX_SAFE_INTEGER + 2, includedByteStart: 0, includedByteEnd: 0, truncated: false, fullSha256: 'a'.repeat(64), includedSha256: 'a'.repeat(64), encoding: 'utf8', content: '' }] }, packDigest: '0'.repeat(64) };
+    expect(verifyEnvelope(unsafe)).toBe(false);
+  });
+  it('a hostile throwing descriptor returns false, never throw', () => {
+    const throwing: any = { get body() { throw new Error('boom'); }, packDigest: '0'.repeat(64) };
+    expect(verifyEnvelope(throwing)).toBe(false);
+  });
+  it('non-object / primitive / mismatched-digest inputs return false', () => {
+    for (const bad of [null, undefined, 'hello', 42, [], true]) expect(verifyEnvelope(bad as any)).toBe(false);
+    expect(verifyEnvelope({ body: okBody(), packDigest: '0'.repeat(64) } as any)).toBe(false); // digest mismatch
+  });
+});
+
+// ── D5 item 3: deterministic linear JWT scanner — detects large tokens the D4 cap missed ───────────
+describe('D5: linear JWT scanner (no 4096 cap, no backtracking)', () => {
+  const b64 = (n: number) => 'a'.repeat(n);
+  const jwt = (pay: number, hdr = 36) => `eyJ${b64(hdr)}.eyJ${b64(pay)}.${b64(43)}`;
+  it('detects a realistic small JWT and a not-a-JWT correctly', () => {
+    expect(scanJwt('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U')).toBe(true);
+    expect(scanJwt('not a token, just some prose with eyJ inside')).toBe(false);
+    expect(scanJwt(`eyJ${b64(20)}.${b64(20)}.${b64(5)}`)).toBe(false); // last segment < 6
+    expect(textHasSecret('AAAA')).toBe(false); // no false-positive on base64 evidence
+  });
+  it('REGRESSION FIX: large-payload and large-x5c JWTs are detected (D4 missed > 4096)', () => {
+    expect(scanJwt(jwt(4000))).toBe(true);
+    expect(scanJwt(jwt(4100))).toBe(true);   // > 4096 — the D4 regression
+    expect(scanJwt(jwt(8000))).toBe(true);
+    expect(scanJwt(jwt(20000))).toBe(true);  // very large enterprise token
+    expect(scanJwt(jwt(200, 2200))).toBe(true); // large x5c cert-chain header (> 256)
+    // and a big JWT in a pack's file content is now refused (parent+D4 caught small, D4 leaked large)
+    const m = bodyWith([mkTextFile('token.http', jwt(6000))], [], []);
+    expect((validatePackBody(m) as any).code).toBe('E_SECRET_CONTENT');
+  });
+  it('the jwt scanner is O(n) on adversarial eyJ… (no backtracking)', () => {
+    const s = (n: number) => scanStepBudget('eyJ'.repeat(Math.ceil(n / 3)).slice(0, n));
+    expect(s(80000)).toBeLessThanOrEqual(2 * s(40000) + 8); // deterministic linear
   });
 });

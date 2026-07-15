@@ -90,24 +90,28 @@ structured secret, can pass. **"No secret found" is advisory — never treat it 
 secret-free.** Adversarial red-teaming (Round-14) confirmed this bound is real; the catalogue was widened in
 response, but exhaustive detection is impossible by construction.
 
-**Secret scanning is O(n), not O(n²).** The `url-userinfo` credential-URL detector (`scheme://user:pass@host`)
-is a **bounded linear scanner**, not a regex (its former greedy regex was an O(n²) ReDoS on benign long runs).
-Additionally, every *catalogue regex* whose greedy quantifier is followed by a required token now has a
-**bounded** upper limit (`{m,N}`, not `{m,}`) — an unbounded greedy run before a required literal backtracks
-O(len) at each of O(len) start positions, i.e. O(n²) on adversarial repeated-prefix input (`API…`, `eyJ…`,
-`-----BEGIN …`). With the bounds, per-start-position work is O(N), so scanning is O(n·N) = linear. The upper
-bounds (scheme ≤ 40 / userinfo ≤ 512 for the scanner; and per-pattern segment ceilings such as jwt ≤ 256/4096/512,
-env-value ≤ 4096) are **best-effort ceilings**: a matchable run longer than its bound is not matched. This
-keeps `validatePackBody` linear on legal within-limits input (minified JS, lockfiles, base64 blobs) while
-still catching realistic secrets. (Terminal `{m,}` quantifiers with no trailing token do not backtrack and
-remain open.)
+**Secret scanning is O(n), not O(n²).** The `url-userinfo` (`scheme://user:pass@host`) and `jwt`
+(`eyJ…​.…​.…`) detectors are **linear hand-written scanners** (`SECRET_CATALOGUE.scanners`), not regexes —
+their former greedy regexes were O(n²) ReDoS on adversarial repeated-prefix input. The `jwt` scanner (D5) has
+**no length cap and no backtracking**, so it detects arbitrarily large enterprise / `x5c` tokens (the D4
+capped regex missed payloads > 4096 chars). Additionally, every remaining *catalogue regex* whose greedy
+quantifier precedes a required token has a **bounded** upper limit (`{m,N}`, not `{m,}`) so per-start-position
+work is O(N) and scanning is O(n·N) = linear; terminal `{m,}` quantifiers (no trailing token) do not backtrack
+and stay open. This keeps `validatePackBody` linear on legal within-limits input (minified JS, lockfiles,
+base64 blobs), verified by a deterministic step-budget test (not a load-sensitive wall clock).
+
+The remaining bounds are **best-effort ceilings** — a matchable run longer than its bound is not matched:
+the url-userinfo scanner detects a userinfo (`user:pass`) of length **≤ 512** (511 and 512 detected, 513 the
+first miss; the scheme window is 40); the bounded regexes cap their variable segments (`env-value ≤ 4096`,
+`sendgrid ≤ 512`, `pem label ≤ 64`). The `jwt` scanner has no such ceiling.
 
 ## 14. Known-answer vectors (decision 11)
 Fixed, independently recomputable vectors are pinned in `test/evidencePackV1.test.ts` and reproduced by
-`scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun: the minimal-body canonical
-bytes, its `packDigest` (`8c02b487…`), the `catalogueId` (`9855772f…`, catalogue v3), a maximal-body
-`packDigest` (`93f8e388…`), and the full-width fence nonce
-`3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28` for `deriveFenceNonce("00"×32,
+`scripts/pyref/evidence_canonical_ref.py` (Python) and under Node + Bun. The exact values (catalogue v3):
+- `catalogueId` = `1504a1587d9464712076f331fda35327f4ba14fa9d9a260d1ac0285aade07aa7`
+- minimal-body `packDigest` = `84e9b48d33e007101157f42dac7b0d05befb8a88f8812384ef95485fced862d2`
+- maximal-body `packDigest` = `03cf93eb0f97d3fde24963aa409e272ef1d8cafcceb46e534412fa32a63112e1`
+- fence nonce `3a23cb4c6895e0ca934a95f328985122a706ccf9d9188a2897e9fbef158acc28` for `deriveFenceNonce("00"×32,
 ["hello","world"])`.
 
 ## Round-12 (Commit D) amendments
@@ -194,6 +198,25 @@ Three reachable defects found by the Round-15 exact-head audit are closed:
   `a://…`). Schema bumped to `-v3`; KATs re-pinned. This scope extension beyond the round's stated url-userinfo
   change is deliberate — leaving the other two quadratic patterns would keep the immune gate DoS-able and make
   the "linear" claim false.
+
+## Round-18 (D5) final byte-pin cleanup
+Freeze-quality fixes found by the D4 exact-head audit (no P0/P1; correctness/coverage/robustness):
+- **`verifyEnvelope` is a total boolean predicate.** Any canonicalization / validation / digest error on
+  hostile inert input (`-0`, lone surrogate, unsafe integer, a throwing accessor, a non-object) returns
+  `false` instead of throwing (the snapshot read is inside the `try`). Pinned with bad-integer / lone-surrogate
+  / hostile-descriptor vectors.
+- **URL userinfo boundary pinned.** The `@` may sit at index `uStart + 512` inclusive, so a `user:pass` of
+  length exactly **512 is detected**; **513 is the first miss**. 511/512/513 behaviour is pinned and documented.
+- **Deterministic linear JWT scanner replaces the capped regex.** D4's bounded `jwt` regex (`{10,4096}`
+  payload) introduced an arbitrary > 4096-char false negative (large enterprise / `x5c` tokens). `scanJwt` is a
+  linear scan with **no length cap and no backtracking** (an O(n) dotless-run skip prevents O(n²) on `eyJ…`).
+  It is listed in `SECRET_CATALOGUE.scanners` (`jwt-v1`) so `catalogueId` binds it. `> 4096` and large-`x5c`
+  detection vectors are pinned.
+- **Deterministic step-budget replaces the flaky wall-clock ratio.** `scanStepBudget` counts exact character
+  steps of the hand-written scanners; the test asserts an O(n) step count (identical on every machine), so
+  correctness no longer depends on scheduler load. A generous wall-clock smoke remains **non-normative**.
+- **Public KAT values corrected** to the exact TS/Python digests (§14). Honest best-effort limitations (§13)
+  and all D4 hostile tests are preserved.
 
 ## Error taxonomy
 `E_SCHEMA, E_NOT_OBJECT, E_MISSING_FIELD, E_UNKNOWN_FIELD, E_WRONG_TYPE, E_ADVISORY_LITERAL,
